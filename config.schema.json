@@ -48,10 +48,11 @@
               "type": "integer",
               "required": true,
               "minimum": 1,
-              "maximum": 10
+              "maximum": 10,
+              "default": 1
             },
             "modeColor": {
-              "title": "Mode Color",
+              "title": "When LED Color Is",
               "type": "string",
               "required": true,
               "default": "yellow",
@@ -61,25 +62,27 @@
                 { "title": "Blue", "enum": ["blue"] },
                 { "title": "Green", "enum": ["green"] },
                 { "title": "Purple", "enum": ["purple"] },
-                { "title": "White", "enum": ["white"] }
+                { "title": "White", "enum": ["white"] },
+                { "title": "Any Color", "enum": ["any"] }
               ]
             },
-            "targetType": {
-              "title": "Target Type",
+            "actionType": {
+              "title": "Action Type",
               "type": "string",
               "required": true,
-              "default": "homekit",
+              "default": "accessory",
               "oneOf": [
-                { "title": "HomeKit Accessory", "enum": ["homekit"] },
-                { "title": "LIFX Light", "enum": ["lifx"] },
-                { "title": "LED Color Change", "enum": ["led"] }
+                { "title": "Control Accessory", "enum": ["accessory"] },
+                { "title": "Trigger Scene", "enum": ["scene"] },
+                { "title": "Change LED Color", "enum": ["led"] }
               ]
             },
             "targetName": {
               "title": "Target Name",
               "type": "string",
               "required": false,
-              "placeholder": "Name of accessory or light"
+              "placeholder": "Name of accessory or scene",
+              "description": "Enter the name of the HomeKit accessory or scene"
             },
             "action": {
               "title": "Action",
@@ -87,18 +90,42 @@
               "required": true,
               "default": "toggle",
               "oneOf": [
-                { "title": "Toggle", "enum": ["toggle"] },
+                { "title": "Toggle On/Off", "enum": ["toggle"] },
                 { "title": "Turn On", "enum": ["on"] },
                 { "title": "Turn Off", "enum": ["off"] },
+                { "title": "Activate Scene", "enum": ["activate"] },
                 { "title": "Set Brightness", "enum": ["brightness"] },
                 { "title": "Set Color", "enum": ["color"] }
-              ]
+              ],
+              "condition": {
+                "functionBody": "return model.actionType !== 'led';"
+              }
             },
             "value": {
               "title": "Value",
               "type": "string",
               "required": false,
-              "placeholder": "Brightness percentage or color (e.g., 50 or #FF0000)"
+              "placeholder": "Brightness percentage or color (e.g., 50 or #FF0000)",
+              "condition": {
+                "functionBody": "return model.action === 'brightness' || model.action === 'color';"
+              }
+            },
+            "ledColor": {
+              "title": "LED Color",
+              "type": "string",
+              "required": false,
+              "default": "yellow",
+              "oneOf": [
+                { "title": "Yellow", "enum": ["yellow"] },
+                { "title": "Red", "enum": ["red"] },
+                { "title": "Blue", "enum": ["blue"] },
+                { "title": "Green", "enum": ["green"] },
+                { "title": "Purple", "enum": ["purple"] },
+                { "title": "White", "enum": ["white"] }
+              ],
+              "condition": {
+                "functionBody": "return model.actionType === 'led';"
+              }
             }
           }
         }

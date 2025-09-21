@@ -2,7 +2,10 @@ const net = require('net');
 
 let Service, Characteristic, PlatformAccessory, uuid;
 
+console.log('Loading iPortSMButtons plugin'); // Debug plugin loading
+
 module.exports = (api) => {
+  console.log('Registering IPortSMButtons platform');
   Service = api.hap.Service;
   Characteristic = api.hap.Characteristic;
   PlatformAccessory = api.hap.PlatformAccessory;
@@ -17,7 +20,7 @@ class IPortSMButtonsPlatform {
     this.api = api;
     this.ip = this.config.ip || '192.168.2.12';
     this.port = this.config.port || 10001;
-    this.timeout = this.config.timeout || 10000;
+    this.timeout = this.config.timeout || 5000;
     this.reconnectDelay = this.config.reconnectDelay || 5000;
     this.buttonServices = [];
     this.buttonStates = Array.from({ length: 10 }, () => ({ state: 0, lastPress: 0 }));
@@ -43,10 +46,23 @@ class IPortSMButtonsPlatform {
     this.currentColorIndex = 0;
     
     this.buttonMappings = this.config.buttonMappings || [];
-    this.log(`Config: ${JSON.stringify(this.config)}`);
+    this.log(`Config loaded: ${JSON.stringify(this.config)}`);
 
     this.log('IPortSMButtonsPlatform initialized');
     this.connect();
+
+    this.api.on('didFinishLaunching', () => {
+      this.log('Homebridge finished launching, ensuring accessories are registered');
+      if (!this.accessory) {
+        this.log('No accessory found, registering new one');
+        this.accessories((accessories) => {
+          this.api.registerPlatformAccessories('homebridge-iport-sm-buttons', 'IPortSMButtons', accessories);
+        });
+      } else {
+        this.log('Using existing accessory');
+        this.processQueuedEvents();
+      }
+    });
 
     this.api.on('shutdown', () => {
       this.isShuttingDown = true;
@@ -55,14 +71,6 @@ class IPortSMButtonsPlatform {
       if (this.socket) {
         this.socket.destroy();
         this.log('Socket closed');
-      }
-    });
-
-    this.api.on('didFinishLaunching', () => {
-      this.log('Homebridge finished launching');
-      if (this.accessory) {
-        this.log('Accessory already registered');
-        this.processQueuedEvents();
       }
     });
   }
@@ -204,6 +212,10 @@ class IPortSMButtonsPlatform {
   triggerButtonEvent(buttonIndex, eventType) {
     if (this.isShuttingDown) return;
     const service = this.buttonServices[buttonIndex];
+    if (!service) {
+      this.log(`Cannot trigger event for button ${buttonIndex + 1}: no service`);
+      return;
+    }
     service.updateCharacteristic(Characteristic.ProgrammableSwitchEvent, eventType);
     const typeStr = eventType === 0 ? 'single' : eventType === 1 ? 'double' : 'long';
     this.log(`Button ${buttonIndex + 1} triggered ${typeStr} press`);
@@ -425,7 +437,10 @@ class IPortSMButtonsPlatform {
   }
 
   queryLED() {
-    if (!this.connected || this.isShuttingDown) return;
+    if (!this.connected || this.isShuttingDown) {
+      this.log('Cannot query LED: not connected or shutting down');
+      return;
+    }
     const cmd = '\rled=?\r';
     this.log(`Querying LED state: ${cmd}`);
     try {
@@ -496,6 +511,7 @@ class IPortSMButtonsPlatform {
 
       const serviceLabel = this.accessory.addService(Service.ServiceLabel);
       serviceLabel.setCharacteristic(Characteristic.ServiceLabelNamespace, 1);
+      this.log('Added ServiceLabel');
 
       this.buttonServices = [];
       for (let i = 1; i <= 10; i++) {
@@ -569,7 +585,6 @@ class IPortSMButtonsPlatform {
         });
 
       this.accessory.updateReachability(this.connected);
-      this.api.registerPlatformAccessories('homebridge-iport-sm-buttons', 'IPortSMButtons', [this.accessory]);
       this.log('Accessories setup completed');
       this.processQueuedEvents();
       callback([this.accessory]);

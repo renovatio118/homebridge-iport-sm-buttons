@@ -11,10 +11,19 @@ class IPortSMButtonsPlatform {
     this.log = log;
     this.config = config || {};
     this.api = api;
+    
+    // Log the configuration we received
+    this.log('IPortSMButtonsPlatform constructor called');
+    this.log(`Configuration: ${JSON.stringify(config, null, 2)}`);
+    
     this.ip = this.config.ip || '192.168.2.12';
     this.port = this.config.port || 10001;
     this.timeout = this.config.timeout || 10000;
     this.reconnectDelay = this.config.reconnectDelay || 5000;
+    
+    this.log(`Using IP: ${this.ip}, Port: ${this.port}`);
+    
+    // Initialize other properties
     this.buttonServices = [];
     this.buttonStates = Array.from({ length: 10 }, () => ({ state: 0, lastPress: 0 }));
     this.ledColor = { r: 255, g: 255, b: 255 };
@@ -43,6 +52,7 @@ class IPortSMButtonsPlatform {
     
     // Store button mappings from config
     this.buttonMappings = this.config.buttonMappings || [];
+    this.log(`Button mappings: ${JSON.stringify(this.buttonMappings, null, 2)}`);
 
     Service = this.api.hap.Service;
     Characteristic = this.api.hap.Characteristic;
@@ -50,7 +60,7 @@ class IPortSMButtonsPlatform {
     uuid = this.api.hap.uuid;
 
     this.log('IPortSMButtonsPlatform initialized');
-
+    
     this.api.on('shutdown', () => {
       this.isShuttingDown = true;
       this.log('Homebridge shutting down, delaying socket close');
@@ -65,20 +75,25 @@ class IPortSMButtonsPlatform {
   }
 
   connect() {
+    this.log('Attempting to connect to device...');
+    
     if (this.socket && !this.socket.destroyed) {
       this.log('Already connected or connecting');
       return;
     }
     
-    this.log(`Attempting connection to ${this.ip}:${this.port}`);
+    this.log(`Creating socket connection to ${this.ip}:${this.port}`);
     this.socket = new net.Socket();
     this.socket.setTimeout(this.timeout);
 
     this.socket.connect(this.port, this.ip, () => {
-      this.log(`Connected to ${this.ip}:${this.port}`);
+      this.log(`SUCCESS: Connected to ${this.ip}:${this.port}`);
       this.connected = true;
-      this.queryLED();
       if (this.accessory && !this.isShuttingDown) this.accessory.updateReachability(true);
+      
+      // Start querying LED status
+      this.queryLED();
+      
       if (!this.keepAliveInterval) {
         this.keepAliveInterval = setInterval(() => {
           if (this.connected && !this.isShuttingDown) this.queryLED();
@@ -92,6 +107,7 @@ class IPortSMButtonsPlatform {
     this.socket.on('data', (data) => {
       if (this.isShuttingDown) return;
       const str = data.toString().trim();
+      this.log(`Received data: ${str}`);
       
       // Only log raw data if it's different from the last received data
       if (this.lastRawData !== str) {
@@ -418,6 +434,7 @@ class IPortSMButtonsPlatform {
   queryLED() {
     if (!this.connected || this.isShuttingDown) return;
     this.socket.write('\rled=?\r');
+    this.log('Queried LED state');
   }
 
   rgbToHsv(r, g, b) {
@@ -451,7 +468,7 @@ class IPortSMButtonsPlatform {
     switch (i % 6) {
       case 0: r = v; g = t; b = p; break;
       case 1: r = q; g = v; b = p; break;
-      case 2: r = p; g = v; b = t; break;
+      case 2: r = p; g: v; b = t; break;
       case 3: r = p; g = q; b = v; break;
       case 4: r = t; g = p; b = v; break;
       case 5: r = v; g = p; b = q; break;
@@ -556,7 +573,10 @@ class IPortSMButtonsPlatform {
       this.log('Accessories setup completed');
       
       // Now connect to the device after accessories are set up
-      setTimeout(() => this.connect(), 1000);
+      setTimeout(() => {
+        this.log('Attempting connection after accessory setup');
+        this.connect();
+      }, 1000);
       
       callback([this.accessory]);
     } catch (e) {
@@ -580,6 +600,9 @@ class IPortSMButtonsPlatform {
     });
     
     // Now connect to the device after accessories are configured
-    setTimeout(() => this.connect(), 1000);
+    setTimeout(() => {
+      this.log('Attempting connection after accessory configuration');
+      this.connect();
+    }, 1000);
   }
 }

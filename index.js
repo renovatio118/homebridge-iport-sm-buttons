@@ -30,7 +30,6 @@ class IPortSMButtonsPlatform {
     this.lastLoggedColor = null;
     this.lastRawData = null;
     
-    // Mode configuration
     this.modeColors = {
       yellow: { r: 255, g: 255, b: 0 },
       red: { r: 255, g: 0, b: 0 },
@@ -40,34 +39,31 @@ class IPortSMButtonsPlatform {
       white: { r: 255, g: 255, b: 255 }
     };
     
-    // Color cycle for button 10
     this.colorCycle = ['red', 'green', 'blue', 'yellow', 'purple', 'white'];
     this.currentColorIndex = 0;
     
-    // Store button mappings from config
     this.buttonMappings = this.config.buttonMappings || [];
+    this.log(`Config: ${JSON.stringify(this.config)}`);
 
     this.log('IPortSMButtonsPlatform initialized');
     this.connect();
 
-    // Register configureAccessory for cached accessories
-    this.api.on('didFinishLaunching', () => {
-      this.log('Homebridge finished launching, registering accessories');
-      this.accessories((accessories) => {
-        this.api.registerPlatformAccessories('homebridge-iport-sm-buttons', 'IPortSMButtons', accessories);
-      });
-    });
-
     this.api.on('shutdown', () => {
       this.isShuttingDown = true;
-      this.log('Homebridge shutting down, delaying socket close');
+      this.log('Homebridge shutting down, closing socket');
       if (this.keepAliveInterval) clearInterval(this.keepAliveInterval);
-      setTimeout(() => {
-        if (this.socket) {
-          this.socket.destroy();
-          this.log('Socket closed');
-        }
-      }, 2000);
+      if (this.socket) {
+        this.socket.destroy();
+        this.log('Socket closed');
+      }
+    });
+
+    this.api.on('didFinishLaunching', () => {
+      this.log('Homebridge finished launching');
+      if (this.accessory) {
+        this.log('Accessory already registered');
+        this.processQueuedEvents();
+      }
     });
   }
 
@@ -80,7 +76,7 @@ class IPortSMButtonsPlatform {
       this.log(`Connected to ${this.ip}:${this.port}`);
       this.connected = true;
       this.queryLED();
-      if (this.accessory && !this.isShuttingDown) this.accessory.updateReachability(true);
+      if (this.accessory) this.accessory.updateReachability(true);
       if (!this.keepAliveInterval) {
         this.keepAliveInterval = setInterval(() => {
           if (this.connected && !this.isShuttingDown) this.queryLED();
@@ -145,17 +141,17 @@ class IPortSMButtonsPlatform {
     });
 
     this.socket.on('error', (err) => {
-      this.log(`Socket error on ${this.port}: ${err.message}`);
+      this.log(`Socket error: ${err.message}`);
       this.socket.destroy();
       this.connected = false;
-      if (this.accessory && !this.isShuttingDown) this.accessory.updateReachability(false);
+      if (this.accessory) this.accessory.updateReachability(false);
       if (!this.isShuttingDown) setTimeout(() => this.connect(), this.reconnectDelay);
     });
 
     this.socket.on('close', () => {
       this.log('Connection closed');
       this.connected = false;
-      if (this.accessory && !this.isShuttingDown) this.accessory.updateReachability(false);
+      if (this.accessory) this.accessory.updateReachability(false);
       if (this.keepAliveInterval) clearInterval(this.keepAliveInterval);
       if (!this.isShuttingDown) setTimeout(() => this.connect(), this.reconnectDelay);
     });
@@ -167,6 +163,7 @@ class IPortSMButtonsPlatform {
   }
 
   queueOrHandleEvent(buttonIndex, state) {
+    this.log(`Queue or handle event: button ${buttonIndex + 1}, state ${state}, services ${this.buttonServices.length}`);
     if (this.buttonServices.length === 0) {
       this.eventQueue.push({ buttonIndex, state });
       this.log(`Queued event for button ${buttonIndex + 1}, state ${state}`);
@@ -176,6 +173,7 @@ class IPortSMButtonsPlatform {
   }
 
   processQueuedEvents() {
+    this.log(`Processing ${this.eventQueue.length} queued events`);
     while (this.eventQueue.length > 0) {
       const event = this.eventQueue.shift();
       this.handleButtonEvent(event.buttonIndex, event.state);
@@ -183,7 +181,10 @@ class IPortSMButtonsPlatform {
   }
 
   handleButtonEvent(buttonIndex, state) {
-    if (!this.connected || this.isShuttingDown) return;
+    if (!this.connected || this.isShuttingDown) {
+      this.log(`Cannot handle event for button ${buttonIndex + 1}: not connected or shutting down`);
+      return;
+    }
     const service = this.buttonServices[buttonIndex];
     if (!service) {
       this.log(`No service found for button ${buttonIndex + 1}`);
@@ -226,6 +227,7 @@ class IPortSMButtonsPlatform {
     }
     
     const currentMode = this.getCurrentMode();
+    this.log(`Current LED mode: ${currentMode}`);
     let actionToExecute = actions.find(action => action.modeColor === currentMode);
     
     if (!actionToExecute) {
@@ -390,13 +392,15 @@ class IPortSMButtonsPlatform {
         return null;
       }
       const accessoriesMap = hbServer.accessories.accessories;
+      const accessoryNames = Array.from(accessoriesMap.values()).map(acc => acc.displayName);
+      this.log(`Available accessories: ${JSON.stringify(accessoryNames)}`);
       for (const acc of accessoriesMap.values()) {
         if (acc.displayName === name) {
           this.log(`Found accessory: ${name}`);
           return acc;
         }
       }
-      this.log(`Accessory "${name}" not found in Homebridge accessories list`);
+      this.log(`Accessory "${name}" not found in Homebridge`);
       return null;
     } catch (e) {
       this.log(`Error in findAccessoryByName: ${e.message}`);
@@ -411,16 +415,24 @@ class IPortSMButtonsPlatform {
     }
     const cmd = `\rled=${r.toString().padStart(3, '0')}${g.toString().padStart(3, '0')}${b.toString().padStart(3, '0')}\r`;
     this.log(`Sending LED command: ${cmd}`);
-    this.socket.write(cmd);
-    this.ledColor = { r, g, b };
-    this.log(`Set LED to ${r},${g},${b}`);
+    try {
+      this.socket.write(cmd);
+      this.ledColor = { r, g, b };
+      this.log(`Set LED to ${r},${g},${b}`);
+    } catch (e) {
+      this.log(`Error sending LED command: ${e.message}`);
+    }
   }
 
   queryLED() {
     if (!this.connected || this.isShuttingDown) return;
     const cmd = '\rled=?\r';
     this.log(`Querying LED state: ${cmd}`);
-    this.socket.write(cmd);
+    try {
+      this.socket.write(cmd);
+    } catch (e) {
+      this.log(`Error querying LED: ${e.message}`);
+    }
   }
 
   rgbToHsv(r, g, b) {
@@ -463,18 +475,22 @@ class IPortSMButtonsPlatform {
   }
 
   updateLightCharacteristics() {
-    if (!this.lightService || !this.connected || this.isShuttingDown) return;
+    if (!this.lightService || !this.connected || this.isShuttingDown) {
+      this.log('Cannot update light characteristics: no service or not connected');
+      return;
+    }
     const hsv = this.rgbToHsv(this.ledColor.r, this.ledColor.g, this.ledColor.b);
     this.lightService
       .updateCharacteristic(Characteristic.On, hsv.v > 0)
       .updateCharacteristic(Characteristic.Hue, hsv.h)
       .updateCharacteristic(Characteristic.Saturation, hsv.s)
       .updateCharacteristic(Characteristic.Brightness, hsv.v);
+    this.log(`Updated light characteristics: On=${hsv.v > 0}, Hue=${hsv.h}, Sat=${hsv.s}, Bri=${hsv.v}`);
   }
 
   accessories(callback) {
+    this.log('Starting accessories setup');
     try {
-      this.log('Starting accessories setup');
       const uuidStr = uuid.generate(this.config.name || 'iPort SM Buttons');
       this.accessory = new PlatformAccessory(this.config.name || 'iPort SM Buttons', uuidStr);
 
@@ -486,10 +502,12 @@ class IPortSMButtonsPlatform {
         const buttonService = this.accessory.addService(Service.StatelessProgrammableSwitch, `Button ${i}`, `button${i}`);
         buttonService.setCharacteristic(Characteristic.ServiceLabelIndex, i);
         this.buttonServices[i - 1] = buttonService;
+        this.log(`Added button service for Button ${i}`);
       }
 
       this.lightService = this.accessory.addService(Service.Lightbulb, 'LED');
       this.lightService.setCharacteristic(Characteristic.On, true);
+      this.log('Added LED light service');
 
       this.lightService.getCharacteristic(Characteristic.On)
         .onGet(() => {
@@ -551,7 +569,7 @@ class IPortSMButtonsPlatform {
         });
 
       this.accessory.updateReachability(this.connected);
-
+      this.api.registerPlatformAccessories('homebridge-iport-sm-buttons', 'IPortSMButtons', [this.accessory]);
       this.log('Accessories setup completed');
       this.processQueuedEvents();
       callback([this.accessory]);
@@ -563,18 +581,22 @@ class IPortSMButtonsPlatform {
 
   configureAccessory(accessory) {
     this.log('Configuring cached accessory');
-    accessory.updateReachability(this.connected);
-    this.accessory = accessory;
-    this.buttonServices = [];
-    accessory.services.forEach(service => {
-      if (service.subtype && service.subtype.startsWith('button')) {
-        const index = parseInt(service.subtype.replace('button', '')) - 1;
-        this.buttonServices[index] = service;
-      } else if (service.displayName === 'LED') {
-        this.lightService = service;
-      }
-    });
-    this.log(`Restored ${this.buttonServices.length} button services`);
-    this.processQueuedEvents();
+    try {
+      accessory.updateReachability(this.connected);
+      this.accessory = accessory;
+      this.buttonServices = [];
+      accessory.services.forEach(service => {
+        if (service.subtype && service.subtype.startsWith('button')) {
+          const index = parseInt(service.subtype.replace('button', '')) - 1;
+          this.buttonServices[index] = service;
+        } else if (service.displayName === 'LED') {
+          this.lightService = service;
+        }
+      });
+      this.log(`Restored ${this.buttonServices.length} button services`);
+      this.processQueuedEvents();
+    } catch (e) {
+      this.log(`Error in configureAccessory: ${e.message}`);
+    }
   }
 }

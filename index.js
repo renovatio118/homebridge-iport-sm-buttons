@@ -50,7 +50,9 @@ class IPortSMButtonsPlatform {
     uuid = this.api.hap.uuid;
 
     this.log('IPortSMButtonsPlatform initialized');
-    this.connect();
+    
+    // Don't connect immediately - wait for accessories to be set up
+    // We'll connect in the accessories() method
 
     this.api.on('shutdown', () => {
       this.isShuttingDown = true;
@@ -66,6 +68,11 @@ class IPortSMButtonsPlatform {
   }
 
   connect() {
+    if (this.socket) {
+      this.log('Already connected or connecting');
+      return;
+    }
+    
     this.log(`Attempting connection to ${this.ip}:${this.port}`);
     this.socket = new net.Socket();
     this.socket.setTimeout(this.timeout);
@@ -80,6 +87,9 @@ class IPortSMButtonsPlatform {
           if (this.connected && !this.isShuttingDown) this.queryLED();
         }, 5000);
       }
+      
+      // Process any queued events now that we're connected
+      this.processQueuedEvents();
     });
 
     this.socket.on('data', (data) => {
@@ -144,6 +154,7 @@ class IPortSMButtonsPlatform {
     this.socket.on('error', (err) => {
       this.log(`Socket error on ${this.port}: ${err.message}`);
       this.socket.destroy();
+      this.socket = null;
       this.connected = false;
       if (this.accessory && !this.isShuttingDown) this.accessory.updateReachability(false);
       if (!this.isShuttingDown) setTimeout(() => this.connect(), this.reconnectDelay);
@@ -151,20 +162,24 @@ class IPortSMButtonsPlatform {
 
     this.socket.on('close', () => {
       this.log('Connection closed');
+      this.socket = null;
       this.connected = false;
       if (this.accessory && !this.isShuttingDown) this.accessory.updateReachability(false);
       if (this.keepAliveInterval) clearInterval(this.keepAliveInterval);
+      this.keepAliveInterval = null;
       if (!this.isShuttingDown) setTimeout(() => this.connect(), this.reconnectDelay);
     });
 
     this.socket.on('timeout', () => {
       this.log('Connection timeout');
       this.socket.destroy();
+      this.socket = null;
     });
   }
 
   queueOrHandleEvent(buttonIndex, state) {
-    if (this.buttonServices.length === 0) {
+    // Check if button services are available
+    if (this.buttonServices.length === 0 || !this.buttonServices[buttonIndex]) {
       this.eventQueue.push({ buttonIndex, state });
       this.log(`Queued event for button ${buttonIndex + 1}, state ${state}`);
     } else {
@@ -173,6 +188,10 @@ class IPortSMButtonsPlatform {
   }
 
   processQueuedEvents() {
+    if (this.eventQueue.length > 0) {
+      this.log(`Processing ${this.eventQueue.length} queued events`);
+    }
+    
     while (this.eventQueue.length > 0) {
       const event = this.eventQueue.shift();
       this.handleButtonEvent(event.buttonIndex, event.state);
@@ -181,11 +200,13 @@ class IPortSMButtonsPlatform {
 
   handleButtonEvent(buttonIndex, state) {
     if (!this.connected || this.isShuttingDown) return;
+    
     const service = this.buttonServices[buttonIndex];
     if (!service) {
       this.log(`No service found for button ${buttonIndex + 1}`);
       return;
     }
+    
     const bs = this.buttonStates[buttonIndex];
 
     if (state === 1) {
@@ -199,7 +220,10 @@ class IPortSMButtonsPlatform {
 
   triggerButtonEvent(buttonIndex, eventType) {
     if (this.isShuttingDown) return;
+    
     const service = this.buttonServices[buttonIndex];
+    if (!service) return;
+    
     service.updateCharacteristic(Characteristic.ProgrammableSwitchEvent, eventType);
     const typeStr = eventType === 0 ? 'single' : eventType === 1 ? 'double' : 'long';
     this.log(`Button ${buttonIndex + 1} triggered ${typeStr} press`);
@@ -283,7 +307,6 @@ class IPortSMButtonsPlatform {
   // Execute HomeKit scene actions
   executeSceneAction(action) {
     this.log(`Scene action requested: ${action.targetName}`);
-    // For now, we'll just log this as we need to implement scene support differently
     this.log('Scene support requires additional implementation. Please use accessory control instead.');
   }
 
@@ -530,7 +553,10 @@ class IPortSMButtonsPlatform {
       this.api.publishExternalAccessories('IPortSMButtons', [this.accessory]);
       this.isPublishing = false;
       this.log('Accessories setup completed');
-      this.processQueuedEvents();
+      
+      // Now connect to the device after accessories are set up
+      this.connect();
+      
       callback([this.accessory]);
     } catch (e) {
       this.log(`Error in accessories setup: ${e.message}`);
@@ -551,6 +577,8 @@ class IPortSMButtonsPlatform {
         this.lightService = service;
       }
     });
-    this.processQueuedEvents();
+    
+    // Now connect to the device after accessories are configured
+    this.connect();
   }
 }

@@ -16,7 +16,7 @@ class IPortSMButtonsPlatform {
     this.timeout = this.config.timeout || 10000; // Increased to 10 seconds
     this.reconnectDelay = this.config.reconnectDelay || 5000;
     this.buttonServices = [];
-    this.buttonStates = Array.from({ length: 10 }, () => ({ state: 0, timer: null, lastPress: 0 }));
+    this.buttonStates = Array.from({ length: 10 }, () => ({ state: 0, lastPress: 0 }));
     this.ledColor = { r: 255, g: 255, b: 255 };
     this.connected = false;
     this.socket = null;
@@ -131,31 +131,14 @@ class IPortSMButtonsPlatform {
     if (!this.connected || this.isShuttingDown) return;
     const service = this.buttonServices[buttonIndex];
     if (!service) return;
-    const now = Date.now();
     const bs = this.buttonStates[buttonIndex];
 
     if (state === 1) {
-      if (bs.state === 0) {
-        bs.state = 1;
-        if (now - bs.lastPress < 500) {
-          this.triggerButtonEvent(buttonIndex, 1); // Double press
-        } else {
-          bs.timer = setTimeout(() => {
-            this.triggerButtonEvent(buttonIndex, 2); // Long press
-            bs.timer = null;
-          }, 800);
-        }
-        bs.lastPress = now;
-      }
-    } else if (state === 0) {
-      if (bs.state === 1) {
-        bs.state = 0;
-        if (bs.timer) {
-          clearTimeout(bs.timer);
-          bs.timer = null;
-          this.triggerButtonEvent(buttonIndex, 0); // Single press
-        }
-      }
+      bs.state = 1;
+      bs.lastPress = Date.now();
+    } else if (state === 0 && bs.state === 1) {
+      bs.state = 0;
+      this.triggerButtonEvent(buttonIndex, 0); // Single press on release
     }
   }
 

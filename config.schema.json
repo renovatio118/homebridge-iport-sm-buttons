@@ -1,0 +1,108 @@
+{
+  "pluginAlias": "IPortSMButtons",
+  "pluginType": "platform",
+  "singular": true,
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Platform Name",
+        "type": "string",
+        "required": true,
+        "default": "iPort Buttons"
+      },
+      "ip": {
+        "title": "Device IP Address",
+        "type": "string",
+        "required": true,
+        "default": "192.168.2.12",
+        "placeholder": "192.168.2.12"
+      },
+      "port": {
+        "title": "Device Port",
+        "type": "integer",
+        "required": true,
+        "default": 10001
+      },
+      "timeout": {
+        "title": "Connection Timeout (ms)",
+        "type": "integer",
+        "required": false,
+        "default": 10000
+      },
+      "reconnectDelay": {
+        "title": "Reconnect Delay (ms)",
+        "type": "integer",
+        "required": false,
+        "default": 5000
+      },
+      "buttonMappings": {
+        "title": "Button Mappings",
+        "type": "array",
+        "items": {
+          "title": "Button Mapping",
+          "type": "object",
+          "properties": {
+            "buttonNumber": {
+              "title": "Button Number",
+              "type": "integer",
+              "required": true,
+              "minimum": 1,
+              "maximum": 10
+            },
+            "modeColor": {
+              "title": "Mode Color",
+              "type": "string",
+              "required": true,
+              "default": "yellow",
+              "oneOf": [
+                { "title": "Yellow", "enum": ["yellow"] },
+                { "title": "Red", "enum": ["red"] },
+                { "title": "Blue", "enum": ["blue"] },
+                { "title": "Green", "enum": ["green"] },
+                { "title": "Purple", "enum": ["purple"] },
+                { "title": "White", "enum": ["white"] }
+              ]
+            },
+            "targetType": {
+              "title": "Target Type",
+              "type": "string",
+              "required": true,
+              "default": "homekit",
+              "oneOf": [
+                { "title": "HomeKit Accessory", "enum": ["homekit"] },
+                { "title": "LIFX Light", "enum": ["lifx"] },
+                { "title": "LED Color Change", "enum": ["led"] }
+              ]
+            },
+            "targetName": {
+              "title": "Target Name",
+              "type": "string",
+              "required": false,
+              "placeholder": "Name of accessory or light"
+            },
+            "action": {
+              "title": "Action",
+              "type": "string",
+              "required": true,
+              "default": "toggle",
+              "oneOf": [
+                { "title": "Toggle", "enum": ["toggle"] },
+                { "title": "Turn On", "enum": ["on"] },
+                { "title": "Turn Off", "enum": ["off"] },
+                { "title": "Set Brightness", "enum": ["brightness"] },
+                { "title": "Set Color", "enum": ["color"] }
+              ]
+            },
+            "value": {
+              "title": "Value",
+              "type": "string",
+              "required": false,
+              "placeholder": "Brightness percentage or color (e.g., 50 or #FF0000)"
+            }
+          }
+        }
+      }
+    }
+  }
+}

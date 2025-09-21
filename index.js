@@ -50,9 +50,6 @@ class IPortSMButtonsPlatform {
     uuid = this.api.hap.uuid;
 
     this.log('IPortSMButtonsPlatform initialized');
-    
-    // Don't connect immediately - wait for accessories to be set up
-    // We'll connect in the accessories() method
 
     this.api.on('shutdown', () => {
       this.isShuttingDown = true;
@@ -68,7 +65,7 @@ class IPortSMButtonsPlatform {
   }
 
   connect() {
-    if (this.socket) {
+    if (this.socket && !this.socket.destroyed) {
       this.log('Already connected or connecting');
       return;
     }
@@ -113,50 +110,54 @@ class IPortSMButtonsPlatform {
         }
       } catch (e) {
         // If not JSON, check for LED data
-        const parts = str.split('led=');
-        parts.forEach((part, index) => {
-          if (index > 0 || (index === 0 && !part.trim() && parts.length > 1)) {
-            const ledValue = part.trim();
-            if (ledValue) {
-              try {
-                let value = ledValue;
-                let newR, newG, newB;
-                
-                if (value.startsWith('#')) {
-                  value = value.slice(1);
-                  newR = parseInt(value.substr(0, 2), 16);
-                  newG = parseInt(value.substr(2, 2), 16);
-                  newB = parseInt(value.substr(4, 2), 16);
-                } else {
-                  newR = parseInt(value.substr(0, 3));
-                  newG = parseInt(value.substr(3, 3));
-                  newB = parseInt(value.substr(6, 3));
+        if (str.includes('led=')) {
+          const parts = str.split('led=');
+          parts.forEach((part, index) => {
+            if (index > 0 || (index === 0 && !part.trim() && parts.length > 1)) {
+              const ledValue = part.trim();
+              if (ledValue) {
+                try {
+                  let value = ledValue;
+                  let newR, newG, newB;
+                  
+                  if (value.startsWith('#')) {
+                    value = value.slice(1);
+                    newR = parseInt(value.substr(0, 2), 16);
+                    newG = parseInt(value.substr(2, 2), 16);
+                    newB = parseInt(value.substr(4, 2), 16);
+                  } else {
+                    newR = parseInt(value.substr(0, 3));
+                    newG = parseInt(value.substr(3, 3));
+                    newB = parseInt(value.substr(6, 3));
+                  }
+                  
+                  // Check if the color has changed
+                  const newColor = `${newR},${newG},${newB}`;
+                  if (this.lastLoggedColor !== newColor) {
+                    this.log(`LED color updated: ${newColor}`);
+                    this.lastLoggedColor = newColor;
+                  }
+                  
+                  this.ledColor = { r: newR, g: newG, b: newB };
+                  this.updateLightCharacteristics();
+                } catch (e) {
+                  this.log(`LED parse error: ${e.message}`);
                 }
-                
-                // Check if the color has changed
-                const newColor = `${newR},${newG},${newB}`;
-                if (this.lastLoggedColor !== newColor) {
-                  this.log(`LED color updated: ${newColor}`);
-                  this.lastLoggedColor = newColor;
-                }
-                
-                this.ledColor = { r: newR, g: newG, b: newB };
-                this.updateLightCharacteristics();
-              } catch (e) {
-                this.log(`LED parse error: ${e.message}`);
               }
             }
-          }
-        });
+          });
+        }
       }
     });
 
     this.socket.on('error', (err) => {
-      this.log(`Socket error on ${this.port}: ${err.message}`);
+      this.log(`Socket error: ${err.message}`);
       this.socket.destroy();
       this.socket = null;
       this.connected = false;
       if (this.accessory && !this.isShuttingDown) this.accessory.updateReachability(false);
+      if (this.keepAliveInterval) clearInterval(this.keepAliveInterval);
+      this.keepAliveInterval = null;
       if (!this.isShuttingDown) setTimeout(() => this.connect(), this.reconnectDelay);
     });
 
@@ -555,7 +556,7 @@ class IPortSMButtonsPlatform {
       this.log('Accessories setup completed');
       
       // Now connect to the device after accessories are set up
-      this.connect();
+      setTimeout(() => this.connect(), 1000);
       
       callback([this.accessory]);
     } catch (e) {
@@ -579,6 +580,6 @@ class IPortSMButtonsPlatform {
     });
     
     // Now connect to the device after accessories are configured
-    this.connect();
+    setTimeout(() => this.connect(), 1000);
   }
 }

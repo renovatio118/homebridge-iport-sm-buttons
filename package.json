@@ -1,14 +1,10 @@
 {
   "name": "homebridge-iport-sm-buttons",
   "version": "1.0.0",
-  "description": "Homebridge plugin for iPort Surface Mount Buttons",
   "main": "index.js",
-  "keywords": [
-    "homebridge-plugin"
-  ],
+  "keywords": ["homebridge-plugin"],
   "engines": {
-    "node": ">=10.0.0",
-    "homebridge": ">=1.0.0"
-  },
-  "dependencies": {}
+    "node": ">=16.0.0",
+    "homebridge": ">=1.6.0"
+  }
 }

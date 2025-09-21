@@ -220,9 +220,6 @@ class IPortSMButtonsPlatform {
       const uuidStr = uuid.generate(this.config.name || 'iPort SM Buttons');
       this.accessory = new Accessory(this.config.name || 'iPort SM Buttons', uuidStr);
 
-      // Publish accessory immediately to avoid setupURI issues
-      this.api.publishExternalAccessories('IPortSMButtons', [this.accessory]);
-
       // Service Label
       const serviceLabel = this.accessory.addService(Service.ServiceLabel);
       serviceLabel.setCharacteristic(Characteristic.ServiceLabelNamespace, 1);
@@ -302,6 +299,8 @@ class IPortSMButtonsPlatform {
       // Initial reachability
       this.accessory.updateReachability(this.connected);
 
+      // Publish accessory within the callback
+      this.api.publishExternalAccessories('IPortSMButtons', [this.accessory]);
       this.log('Accessories setup completed');
       callback([this.accessory]);
     } catch (e) {

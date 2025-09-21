@@ -55,7 +55,6 @@ class IPortSMButtonsPlatform {
       this.connected = true;
       this.queryLED();
       if (this.accessory && !this.isShuttingDown) this.accessory.updateReachability(true);
-      // Start keep-alive interval
       if (!this.keepAliveInterval) {
         this.keepAliveInterval = setInterval(() => {
           if (this.connected && !this.isShuttingDown) this.queryLED();
@@ -67,50 +66,43 @@ class IPortSMButtonsPlatform {
       if (this.isShuttingDown) return;
       const str = data.toString().trim();
       this.log(`Received raw: ${str}`);
-      const parts = str.split('led=');
-      parts.forEach((part, index) => {
-        if (index === 0 && part.trim()) {
-          try {
-            const json = JSON.parse(part);
-            if (json.events) {
-              json.events.forEach((event) => {
-                const keyNum = parseInt(event.label.split(' ')[1], 10) - 1;
-                const state = parseInt(event.state, 10);
-                this.handleButtonEvent(keyNum, state);
-              });
-            } else if (json.keys) {
-              json.keys.forEach((key, idx) => {
-                const state = parseInt(key.state, 10);
-                this.handleButtonEvent(idx, state);
-              });
-            }
-          } catch (e) {
-            this.log(`JSON parse error: ${e.message}`);
-          }
+      try {
+        const json = JSON.parse(str);
+        if (json.events) {
+          json.events.forEach((event) => {
+            const keyNum = parseInt(event.label.split(' ')[1], 10) - 1;
+            const state = parseInt(event.state, 10);
+            this.handleButtonEvent(keyNum, state);
+          });
         }
-        if (index > 0 || (index === 0 && !part.trim() && parts.length > 1)) {
-          const ledValue = part.trim();
-          if (ledValue) {
-            try {
-              let value = ledValue;
-              if (value.startsWith('#')) {
-                value = value.slice(1);
-                this.ledColor.r = parseInt(value.substr(0, 2), 16);
-                this.ledColor.g = parseInt(value.substr(2, 2), 16);
-                this.ledColor.b = parseInt(value.substr(4, 2), 16);
-              } else {
-                this.ledColor.r = parseInt(value.substr(0, 3));
-                this.ledColor.g = parseInt(value.substr(3, 3));
-                this.ledColor.b = parseInt(value.substr(6, 3));
+      } catch (e) {
+        // If not JSON, check for LED data
+        const parts = str.split('led=');
+        parts.forEach((part, index) => {
+          if (index > 0 || (index === 0 && !part.trim() && parts.length > 1)) {
+            const ledValue = part.trim();
+            if (ledValue) {
+              try {
+                let value = ledValue;
+                if (value.startsWith('#')) {
+                  value = value.slice(1);
+                  this.ledColor.r = parseInt(value.substr(0, 2), 16);
+                  this.ledColor.g = parseInt(value.substr(2, 2), 16);
+                  this.ledColor.b = parseInt(value.substr(4, 2), 16);
+                } else {
+                  this.ledColor.r = parseInt(value.substr(0, 3));
+                  this.ledColor.g = parseInt(value.substr(3, 3));
+                  this.ledColor.b = parseInt(value.substr(6, 3));
+                }
+                this.log(`LED color updated: ${this.ledColor.r},${this.ledColor.g},${this.ledColor.b}`);
+                this.updateLightCharacteristics();
+              } catch (e) {
+                this.log(`LED parse error: ${e.message}`);
               }
-              this.log(`LED color updated: ${this.ledColor.r},${this.ledColor.g},${this.ledColor.b}`);
-              this.updateLightCharacteristics();
-            } catch (e) {
-              this.log(`LED parse error: ${e.message}`);
             }
           }
-        }
-      });
+        });
+      }
     });
 
     this.socket.on('error', (err) => {

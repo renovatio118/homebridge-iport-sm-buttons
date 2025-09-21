@@ -20,6 +20,7 @@ class IPortSMButtonsPlatform {
     this.ledColor = { r: 255, g: 255, b: 255 };
     this.connected = false;
     this.socket = null;
+    this.isPublishing = false;
 
     Service = this.api.hap.Service;
     Characteristic = this.api.hap.Characteristic;
@@ -299,8 +300,10 @@ class IPortSMButtonsPlatform {
       // Initial reachability
       this.accessory.updateReachability(this.connected);
 
-      // Publish accessory within the callback
+      // Publish accessories synchronously within the callback
+      this.isPublishing = true;
       this.api.publishExternalAccessories('IPortSMButtons', [this.accessory]);
+      this.isPublishing = false;
       this.log('Accessories setup completed');
       callback([this.accessory]);
     } catch (e) {

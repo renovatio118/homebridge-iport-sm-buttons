@@ -24,7 +24,7 @@ class IPortSMButtonsPlatform {
     this.maxAttemptsPerCycle = 1; // Stick to 10001 since it works
     this.accessory = null;
 
-    // Start connection in background
+    this.log('IPortSMButtonsPlatform initialized');
     this.connect();
   }
 
@@ -48,11 +48,9 @@ class IPortSMButtonsPlatform {
     this.socket.on('data', (data) => {
       const str = data.toString().trim();
       this.log(`Received raw: ${str}`);
-      // Split data into JSON and LED parts
       const parts = str.split('led=');
       parts.forEach((part, index) => {
         if (index === 0 && part.trim()) {
-          // Attempt to parse JSON
           try {
             const json = JSON.parse(part);
             if (json.events) {
@@ -67,7 +65,6 @@ class IPortSMButtonsPlatform {
           }
         }
         if (index > 0 || (index === 0 && !part.trim() && parts.length > 1)) {
-          // Handle LED part (including case where LED is first after split)
           const ledValue = part.trim();
           if (ledValue) {
             try {
@@ -218,6 +215,7 @@ class IPortSMButtonsPlatform {
 
   accessories(callback) {
     try {
+      this.log('Starting accessories setup');
       const uuid = this.api.hap.uuid.generate(this.config.name || 'iPort SM Buttons');
       this.accessory = new this.api.platformAccessory(this.config.name || 'iPort SM Buttons', uuid);
 
@@ -299,6 +297,7 @@ class IPortSMButtonsPlatform {
       // Initial reachability
       this.accessory.updateReachability(this.connected);
 
+      this.log('Accessories setup completed, publishing accessory');
       callback([this.accessory]);
     } catch (e) {
       this.log(`Error in accessories setup: ${e.message}`);

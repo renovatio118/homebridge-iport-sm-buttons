@@ -23,6 +23,7 @@ class IPortSMButtonsPlatform {
     this.isPublishing = false;
     this.isShuttingDown = false;
     this.keepAliveInterval = null;
+    this.eventQueue = []; // Queue for events before services are ready
 
     Service = this.api.hap.Service;
     Characteristic = this.api.hap.Characteristic;
@@ -72,7 +73,7 @@ class IPortSMButtonsPlatform {
           json.events.forEach((event) => {
             const keyNum = parseInt(event.label.split(' ')[1], 10) - 1;
             const state = parseInt(event.state, 10);
-            this.handleButtonEvent(keyNum, state);
+            this.queueOrHandleEvent(keyNum, state);
           });
         }
       } catch (e) {
@@ -127,10 +128,29 @@ class IPortSMButtonsPlatform {
     });
   }
 
+  queueOrHandleEvent(buttonIndex, state) {
+    if (this.buttonServices.length === 0) {
+      this.eventQueue.push({ buttonIndex, state });
+      this.log(`Queued event for button ${buttonIndex + 1}, state ${state}`);
+    } else {
+      this.handleButtonEvent(buttonIndex, state);
+    }
+  }
+
+  processQueuedEvents() {
+    while (this.eventQueue.length > 0) {
+      const event = this.eventQueue.shift();
+      this.handleButtonEvent(event.buttonIndex, event.state);
+    }
+  }
+
   handleButtonEvent(buttonIndex, state) {
     if (!this.connected || this.isShuttingDown) return;
     const service = this.buttonServices[buttonIndex];
-    if (!service) return;
+    if (!service) {
+      this.log(`No service found for button ${buttonIndex + 1}`);
+      return;
+    }
     const bs = this.buttonStates[buttonIndex];
 
     if (state === 1) {
@@ -304,6 +324,7 @@ class IPortSMButtonsPlatform {
       this.api.publishExternalAccessories('IPortSMButtons', [this.accessory]);
       this.isPublishing = false;
       this.log('Accessories setup completed');
+      this.processQueuedEvents(); // Process any queued events after setup
       callback([this.accessory]);
     } catch (e) {
       this.log(`Error in accessories setup: ${e.message}`);
@@ -324,5 +345,6 @@ class IPortSMButtonsPlatform {
         this.lightService = service;
       }
     });
+    this.processQueuedEvents(); // Process any queued events after reconfiguration
   }
 }

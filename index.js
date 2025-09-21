@@ -15,7 +15,7 @@ class IPortSMButtonsPlatform {
     this.port = this.config.port || 10001;
     this.timeout = this.config.timeout || 5000;
     this.reconnectDelay = this.config.reconnectDelay || 5000;
-    this.accessories = [];
+    this.buttonServices = [];
     this.buttonStates = Array.from({ length: 10 }, () => ({ state: 0, timer: null, lastPress: 0 }));
     this.ledColor = { r: 255, g: 255, b: 255 };
     this.connected = false;
@@ -29,6 +29,13 @@ class IPortSMButtonsPlatform {
 
     this.log('IPortSMButtonsPlatform initialized');
     this.connect();
+
+    this.api.on('shutdown', () => {
+      this.log('Homebridge shutting down, closing socket');
+      if (this.socket) {
+        this.socket.destroy();
+      }
+    });
   }
 
   connect() {
@@ -40,7 +47,7 @@ class IPortSMButtonsPlatform {
       this.log(`Connected to ${this.ip}:${this.port}`);
       this.connected = true;
       this.queryLED();
-      this.accessories.forEach(acc => acc.updateReachability(true));
+      if (this.accessory) this.accessory.updateReachability(true);
     });
 
     this.socket.on('data', (data) => {
@@ -96,14 +103,14 @@ class IPortSMButtonsPlatform {
       this.log(`Error on ${this.port}: ${err.message}`);
       this.socket.destroy();
       this.connected = false;
-      this.accessories.forEach(acc => acc.updateReachability(false));
+      if (this.accessory) this.accessory.updateReachability(false);
       setTimeout(() => this.connect(), this.reconnectDelay);
     });
 
     this.socket.on('close', () => {
       this.log('Connection closed');
       this.connected = false;
-      this.accessories.forEach(acc => acc.updateReachability(false));
+      if (this.accessory) this.accessory.updateReachability(false);
       setTimeout(() => this.connect(), this.reconnectDelay);
     });
 
@@ -115,7 +122,7 @@ class IPortSMButtonsPlatform {
 
   handleButtonEvent(buttonIndex, state) {
     if (!this.connected) return;
-    const service = this.accessories[buttonIndex];
+    const service = this.buttonServices[buttonIndex];
     if (!service) return;
     const now = Date.now();
     const bs = this.buttonStates[buttonIndex];
@@ -146,7 +153,7 @@ class IPortSMButtonsPlatform {
   }
 
   triggerButtonEvent(buttonIndex, eventType) {
-    const service = this.accessories[buttonIndex];
+    const service = this.buttonServices[buttonIndex];
     service.updateCharacteristic(Characteristic.ProgrammableSwitchEvent, eventType);
     const typeStr = eventType === 0 ? 'single' : eventType === 1 ? 'double' : 'long';
     this.log(`Button ${buttonIndex + 1} triggered ${typeStr} press`);
@@ -226,11 +233,11 @@ class IPortSMButtonsPlatform {
       serviceLabel.setCharacteristic(Characteristic.ServiceLabelNamespace, 1);
 
       // Buttons
-      this.accessories = [];
+      this.buttonServices = [];
       for (let i = 1; i <= 10; i++) {
         const buttonService = this.accessory.addService(Service.StatelessProgrammableSwitch, `Button ${i}`, `button${i}`);
         buttonService.setCharacteristic(Characteristic.ServiceLabelIndex, i);
-        this.accessories[i - 1] = buttonService;
+        this.buttonServices[i - 1] = buttonService;
       }
 
       // LED Light
@@ -300,7 +307,7 @@ class IPortSMButtonsPlatform {
       // Initial reachability
       this.accessory.updateReachability(this.connected);
 
-      // Publish accessories synchronously within the callback
+      // Publish accessory within the callback
       this.isPublishing = true;
       this.api.publishExternalAccessories('IPortSMButtons', [this.accessory]);
       this.isPublishing = false;
@@ -316,11 +323,11 @@ class IPortSMButtonsPlatform {
     this.log('Configuring cached accessory');
     accessory.updateReachability(this.connected);
     this.accessory = accessory;
-    this.accessories = [];
+    this.buttonServices = [];
     accessory.services.forEach(service => {
       if (service.subtype && service.subtype.startsWith('button')) {
         const index = parseInt(service.subtype.replace('button', '')) - 1;
-        this.accessories[index] = service;
+        this.buttonServices[index] = service;
       } else if (service.name === 'LED') {
         this.lightService = service;
       }

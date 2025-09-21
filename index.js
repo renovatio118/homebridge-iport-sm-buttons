@@ -11,19 +11,10 @@ class IPortSMButtonsPlatform {
     this.log = log;
     this.config = config || {};
     this.api = api;
-    
-    // Log the configuration we received
-    this.log('IPortSMButtonsPlatform constructor called');
-    this.log(`Configuration: ${JSON.stringify(config, null, 2)}`);
-    
     this.ip = this.config.ip || '192.168.2.12';
     this.port = this.config.port || 10001;
     this.timeout = this.config.timeout || 10000;
     this.reconnectDelay = this.config.reconnectDelay || 5000;
-    
-    this.log(`Using IP: ${this.ip}, Port: ${this.port}`);
-    
-    // Initialize other properties
     this.buttonServices = [];
     this.buttonStates = Array.from({ length: 10 }, () => ({ state: 0, lastPress: 0 }));
     this.ledColor = { r: 255, g: 255, b: 255 };
@@ -52,7 +43,6 @@ class IPortSMButtonsPlatform {
     
     // Store button mappings from config
     this.buttonMappings = this.config.buttonMappings || [];
-    this.log(`Button mappings: ${JSON.stringify(this.buttonMappings, null, 2)}`);
 
     Service = this.api.hap.Service;
     Characteristic = this.api.hap.Characteristic;
@@ -60,7 +50,8 @@ class IPortSMButtonsPlatform {
     uuid = this.api.hap.uuid;
 
     this.log('IPortSMButtonsPlatform initialized');
-    
+    this.connect();
+
     this.api.on('shutdown', () => {
       this.isShuttingDown = true;
       this.log('Homebridge shutting down, delaying socket close');
@@ -75,39 +66,25 @@ class IPortSMButtonsPlatform {
   }
 
   connect() {
-    this.log('Attempting to connect to device...');
-    
-    if (this.socket && !this.socket.destroyed) {
-      this.log('Already connected or connecting');
-      return;
-    }
-    
-    this.log(`Creating socket connection to ${this.ip}:${this.port}`);
+    this.log(`Attempting connection to ${this.ip}:${this.port}`);
     this.socket = new net.Socket();
     this.socket.setTimeout(this.timeout);
 
     this.socket.connect(this.port, this.ip, () => {
-      this.log(`SUCCESS: Connected to ${this.ip}:${this.port}`);
+      this.log(`Connected to ${this.ip}:${this.port}`);
       this.connected = true;
-      if (this.accessory && !this.isShuttingDown) this.accessory.updateReachability(true);
-      
-      // Start querying LED status
       this.queryLED();
-      
+      if (this.accessory && !this.isShuttingDown) this.accessory.updateReachability(true);
       if (!this.keepAliveInterval) {
         this.keepAliveInterval = setInterval(() => {
           if (this.connected && !this.isShuttingDown) this.queryLED();
         }, 5000);
       }
-      
-      // Process any queued events now that we're connected
-      this.processQueuedEvents();
     });
 
     this.socket.on('data', (data) => {
       if (this.isShuttingDown) return;
       const str = data.toString().trim();
-      this.log(`Received data: ${str}`);
       
       // Only log raw data if it's different from the last received data
       if (this.lastRawData !== str) {
@@ -126,77 +103,68 @@ class IPortSMButtonsPlatform {
         }
       } catch (e) {
         // If not JSON, check for LED data
-        if (str.includes('led=')) {
-          const parts = str.split('led=');
-          parts.forEach((part, index) => {
-            if (index > 0 || (index === 0 && !part.trim() && parts.length > 1)) {
-              const ledValue = part.trim();
-              if (ledValue) {
-                try {
-                  let value = ledValue;
-                  let newR, newG, newB;
-                  
-                  if (value.startsWith('#')) {
-                    value = value.slice(1);
-                    newR = parseInt(value.substr(0, 2), 16);
-                    newG = parseInt(value.substr(2, 2), 16);
-                    newB = parseInt(value.substr(4, 2), 16);
-                  } else {
-                    newR = parseInt(value.substr(0, 3));
-                    newG = parseInt(value.substr(3, 3));
-                    newB = parseInt(value.substr(6, 3));
-                  }
-                  
-                  // Check if the color has changed
-                  const newColor = `${newR},${newG},${newB}`;
-                  if (this.lastLoggedColor !== newColor) {
-                    this.log(`LED color updated: ${newColor}`);
-                    this.lastLoggedColor = newColor;
-                  }
-                  
-                  this.ledColor = { r: newR, g: newG, b: newB };
-                  this.updateLightCharacteristics();
-                } catch (e) {
-                  this.log(`LED parse error: ${e.message}`);
+        const parts = str.split('led=');
+        parts.forEach((part, index) => {
+          if (index > 0 || (index === 0 && !part.trim() && parts.length > 1)) {
+            const ledValue = part.trim();
+            if (ledValue) {
+              try {
+                let value = ledValue;
+                let newR, newG, newB;
+                
+                if (value.startsWith('#')) {
+                  value = value.slice(1);
+                  newR = parseInt(value.substr(0, 2), 16);
+                  newG = parseInt(value.substr(2, 2), 16);
+                  newB = parseInt(value.substr(4, 2), 16);
+                } else {
+                  newR = parseInt(value.substr(0, 3));
+                  newG = parseInt(value.substr(3, 3));
+                  newB = parseInt(value.substr(6, 3));
                 }
+                
+                // Check if the color has changed
+                const newColor = `${newR},${newG},${newB}`;
+                if (this.lastLoggedColor !== newColor) {
+                  this.log(`LED color updated: ${newColor}`);
+                  this.lastLoggedColor = newColor;
+                }
+                
+                this.ledColor = { r: newR, g: newG, b: newB };
+                this.updateLightCharacteristics();
+              } catch (e) {
+                this.log(`LED parse error: ${e.message}`);
               }
             }
-          });
-        }
+          }
+        });
       }
     });
 
     this.socket.on('error', (err) => {
-      this.log(`Socket error: ${err.message}`);
+      this.log(`Socket error on ${this.port}: ${err.message}`);
       this.socket.destroy();
-      this.socket = null;
       this.connected = false;
       if (this.accessory && !this.isShuttingDown) this.accessory.updateReachability(false);
-      if (this.keepAliveInterval) clearInterval(this.keepAliveInterval);
-      this.keepAliveInterval = null;
       if (!this.isShuttingDown) setTimeout(() => this.connect(), this.reconnectDelay);
     });
 
     this.socket.on('close', () => {
       this.log('Connection closed');
-      this.socket = null;
       this.connected = false;
       if (this.accessory && !this.isShuttingDown) this.accessory.updateReachability(false);
       if (this.keepAliveInterval) clearInterval(this.keepAliveInterval);
-      this.keepAliveInterval = null;
       if (!this.isShuttingDown) setTimeout(() => this.connect(), this.reconnectDelay);
     });
 
     this.socket.on('timeout', () => {
       this.log('Connection timeout');
       this.socket.destroy();
-      this.socket = null;
     });
   }
 
   queueOrHandleEvent(buttonIndex, state) {
-    // Check if button services are available
-    if (this.buttonServices.length === 0 || !this.buttonServices[buttonIndex]) {
+    if (this.buttonServices.length === 0) {
       this.eventQueue.push({ buttonIndex, state });
       this.log(`Queued event for button ${buttonIndex + 1}, state ${state}`);
     } else {
@@ -205,10 +173,6 @@ class IPortSMButtonsPlatform {
   }
 
   processQueuedEvents() {
-    if (this.eventQueue.length > 0) {
-      this.log(`Processing ${this.eventQueue.length} queued events`);
-    }
-    
     while (this.eventQueue.length > 0) {
       const event = this.eventQueue.shift();
       this.handleButtonEvent(event.buttonIndex, event.state);
@@ -217,13 +181,11 @@ class IPortSMButtonsPlatform {
 
   handleButtonEvent(buttonIndex, state) {
     if (!this.connected || this.isShuttingDown) return;
-    
     const service = this.buttonServices[buttonIndex];
     if (!service) {
       this.log(`No service found for button ${buttonIndex + 1}`);
       return;
     }
-    
     const bs = this.buttonStates[buttonIndex];
 
     if (state === 1) {
@@ -237,10 +199,7 @@ class IPortSMButtonsPlatform {
 
   triggerButtonEvent(buttonIndex, eventType) {
     if (this.isShuttingDown) return;
-    
     const service = this.buttonServices[buttonIndex];
-    if (!service) return;
-    
     service.updateCharacteristic(Characteristic.ProgrammableSwitchEvent, eventType);
     const typeStr = eventType === 0 ? 'single' : eventType === 1 ? 'double' : 'long';
     this.log(`Button ${buttonIndex + 1} triggered ${typeStr} press`);
@@ -324,6 +283,7 @@ class IPortSMButtonsPlatform {
   // Execute HomeKit scene actions
   executeSceneAction(action) {
     this.log(`Scene action requested: ${action.targetName}`);
+    // For now, we'll just log this as we need to implement scene support differently
     this.log('Scene support requires additional implementation. Please use accessory control instead.');
   }
 
@@ -434,7 +394,6 @@ class IPortSMButtonsPlatform {
   queryLED() {
     if (!this.connected || this.isShuttingDown) return;
     this.socket.write('\rled=?\r');
-    this.log('Queried LED state');
   }
 
   rgbToHsv(r, g, b) {
@@ -468,7 +427,7 @@ class IPortSMButtonsPlatform {
     switch (i % 6) {
       case 0: r = v; g = t; b = p; break;
       case 1: r = q; g = v; b = p; break;
-      case 2: r = p; g: v; b = t; break;
+      case 2: r = p; g = v; b = t; break;
       case 3: r = p; g = q; b = v; break;
       case 4: r = t; g = p; b = v; break;
       case 5: r = v; g = p; b = q; break;
@@ -571,13 +530,7 @@ class IPortSMButtonsPlatform {
       this.api.publishExternalAccessories('IPortSMButtons', [this.accessory]);
       this.isPublishing = false;
       this.log('Accessories setup completed');
-      
-      // Now connect to the device after accessories are set up
-      setTimeout(() => {
-        this.log('Attempting connection after accessory setup');
-        this.connect();
-      }, 1000);
-      
+      this.processQueuedEvents();
       callback([this.accessory]);
     } catch (e) {
       this.log(`Error in accessories setup: ${e.message}`);
@@ -598,11 +551,6 @@ class IPortSMButtonsPlatform {
         this.lightService = service;
       }
     });
-    
-    // Now connect to the device after accessories are configured
-    setTimeout(() => {
-      this.log('Attempting connection after accessory configuration');
-      this.connect();
-    }, 1000);
+    this.processQueuedEvents();
   }
 }

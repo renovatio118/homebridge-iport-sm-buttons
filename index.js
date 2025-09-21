@@ -13,7 +13,7 @@ class IPortSMButtonsPlatform {
     this.api = api;
     this.ip = this.config.ip || '192.168.2.12';
     this.port = this.config.port || 10001;
-    this.timeout = this.config.timeout || 10000; // Increased to 10 seconds
+    this.timeout = this.config.timeout || 10000;
     this.reconnectDelay = this.config.reconnectDelay || 5000;
     this.buttonServices = [];
     this.buttonStates = Array.from({ length: 10 }, () => ({ state: 0, lastPress: 0 }));
@@ -23,8 +23,9 @@ class IPortSMButtonsPlatform {
     this.isPublishing = false;
     this.isShuttingDown = false;
     this.keepAliveInterval = null;
-    this.eventQueue = []; // Queue for events before services are ready
-    this.lastLoggedColor = null; // Track last logged LED color
+    this.eventQueue = [];
+    this.lastLoggedColor = null;
+    this.lastRawData = null;
 
     Service = this.api.hap.Service;
     Characteristic = this.api.hap.Characteristic;
@@ -43,7 +44,7 @@ class IPortSMButtonsPlatform {
           this.socket.destroy();
           this.log('Socket closed');
         }
-      }, 2000); // Increased to 2 seconds
+      }, 2000);
     });
   }
 
@@ -60,14 +61,20 @@ class IPortSMButtonsPlatform {
       if (!this.keepAliveInterval) {
         this.keepAliveInterval = setInterval(() => {
           if (this.connected && !this.isShuttingDown) this.queryLED();
-        }, 5000); // Query every 5 seconds
+        }, 5000);
       }
     });
 
     this.socket.on('data', (data) => {
       if (this.isShuttingDown) return;
       const str = data.toString().trim();
-      this.log(`Received raw: ${str}`);
+      
+      // Only log raw data if it's different from the last received data
+      if (this.lastRawData !== str) {
+        this.log(`Received raw: ${str}`);
+        this.lastRawData = str;
+      }
+      
       try {
         const json = JSON.parse(str);
         if (json.events) {
@@ -169,7 +176,7 @@ class IPortSMButtonsPlatform {
       bs.lastPress = Date.now();
     } else if (state === 0 && bs.state === 1) {
       bs.state = 0;
-      this.triggerButtonEvent(buttonIndex, 0); // Single press on release
+      this.triggerButtonEvent(buttonIndex, 0);
     }
   }
 
@@ -192,7 +199,6 @@ class IPortSMButtonsPlatform {
   queryLED() {
     if (!this.connected || this.isShuttingDown) return;
     this.socket.write('\rled=?\r');
-    // this.log('Queried LED state'); // Commented out to reduce log noise
   }
 
   rgbToHsv(r, g, b) {
@@ -249,13 +255,11 @@ class IPortSMButtonsPlatform {
       this.log('Starting accessories setup');
       const uuidStr = uuid.generate(this.config.name || 'iPort SM Buttons');
       this.accessory = new Accessory(this.config.name || 'iPort SM Buttons', uuidStr);
-      this.accessory.publish({ port: 43715 }); // Pre-publish to avoid setupURI error
+      this.accessory.publish({ port: 43715 });
 
-      // Service Label
       const serviceLabel = this.accessory.addService(Service.ServiceLabel);
       serviceLabel.setCharacteristic(Characteristic.ServiceLabelNamespace, 1);
 
-      // Buttons
       this.buttonServices = [];
       for (let i = 1; i <= 10; i++) {
         const buttonService = this.accessory.addService(Service.StatelessProgrammableSwitch, `Button ${i}`, `button${i}`);
@@ -263,11 +267,9 @@ class IPortSMButtonsPlatform {
         this.buttonServices[i - 1] = buttonService;
       }
 
-      // LED Light
       this.lightService = this.accessory.addService(Service.Lightbulb, 'LED');
       this.lightService.setCharacteristic(Characteristic.On, true);
 
-      // Bind handlers
       this.lightService.getCharacteristic(Characteristic.On)
         .onGet(() => {
           if (!this.connected) throw new Error('Device not connected');
@@ -327,19 +329,17 @@ class IPortSMButtonsPlatform {
           this.setLED(r, g, b);
         });
 
-      // Initial reachability
       this.accessory.updateReachability(this.connected);
 
-      // Publish accessory within the callback
       this.isPublishing = true;
       this.api.publishExternalAccessories('IPortSMButtons', [this.accessory]);
       this.isPublishing = false;
       this.log('Accessories setup completed');
-      this.processQueuedEvents(); // Process any queued events after setup
+      this.processQueuedEvents();
       callback([this.accessory]);
     } catch (e) {
       this.log(`Error in accessories setup: ${e.message}`);
-      callback([]); // Prevent crash
+      callback([]);
     }
   }
 
@@ -356,6 +356,6 @@ class IPortSMButtonsPlatform {
         this.lightService = service;
       }
     });
-    this.processQueuedEvents(); // Process any queued events after reconfiguration
+    this.processQueuedEvents();
   }
 }

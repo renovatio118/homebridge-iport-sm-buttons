@@ -14,32 +14,39 @@ class IPortSMButtonsPlatform {
     this.api = api;
     this.config = config || {};
     this.ip = config.ip || '192.168.2.12';
-    this.port = config.port || 10001;
+    this.port = config.port || 10001; // Default to 10001, try 80 if fails
     this.accessories = [];
     this.buttonStates = Array.from({ length: 10 }, () => ({ state: 0, timer: null, lastPress: 0 }));
     this.ledColor = { r: 255, g: 255, b: 255 }; // Default white
     this.socket = null;
     this.ready = false;
     this.accessory = null;
+    this.connectAttempts = 0;
+    this.maxAttempts = 2; // Try port 10001, then 80
 
-    // Delay accessory publishing until connection
     this.connect();
-    this.publishAccessories();
   }
 
   connect() {
     this.socket = new net.Socket();
-    this.socket.connect(this.port, this.ip, () => {
-      this.log(`Connected to ${this.ip}:${this.port}`);
+    const currentPort = this.connectAttempts === 0 ? this.port : 80; // Try 10001 first, then 80
+    this.log(`Attempting connection to ${this.ip}:${currentPort} (Attempt ${this.connectAttempts + 1}/${this.maxAttempts})`);
+    this.socket.connect(currentPort, this.ip, () => {
+      this.log(`Connected to ${this.ip}:${currentPort}`);
       this.ready = true;
-      this.queryLED(); // Get initial LED state
+      this.queryLED();
       if (this.accessory) this.api.publishExternalAccessories('IPortSMButtons', [this.accessory]);
     });
 
     this.socket.on('error', (err) => {
-      this.log(`Socket error: ${err.message}. Ensure device is on, IP is correct, and port 10001 is open. Retrying in 5s...`);
-      this.ready = false;
-      setTimeout(() => this.connect(), 5000);
+      this.log(`Socket error on ${this.ip}:${currentPort}: ${err.message}.`);
+      this.socket.destroy();
+      if (this.connectAttempts < this.maxAttempts - 1) {
+        this.connectAttempts++;
+        setTimeout(() => this.connect(), 5000); // Retry with next port
+      } else {
+        this.log('Failed to connect on all ports. Ensure device is configured for TCP on 10001 or 80.');
+      }
     });
 
     this.socket.on('data', (data) => {
@@ -83,7 +90,7 @@ class IPortSMButtonsPlatform {
     });
 
     this.socket.on('close', () => {
-      this.log('Connection closed, reconnecting in 5s...');
+      this.log('Connection closed, retrying in 5s...');
       this.ready = false;
       setTimeout(() => this.connect(), 5000);
     });
@@ -162,12 +169,12 @@ class IPortSMButtonsPlatform {
       this.api.publishExternalAccessories('IPortSMButtons', [this.accessory]);
     } else {
       this.log('Waiting for connection before publishing accessories...');
-      setTimeout(() => this.publishAccessories(), 5000); // Retry every 5 seconds
+      setTimeout(() => this.publishAccessories(), 5000);
     }
   }
 
   accessories(callback) {
-    callback([]);
-    // Accessories are published dynamically in publishAccessories
+    callback([]); // Return empty initially to avoid assertion error
+    this.publishAccessories(); // Start the publishing process
   }
 }

@@ -1,5 +1,4 @@
 const net = require('net');
-const homebridgeAPI = require('homebridge-api');
 
 let Service, Characteristic, Accessory, uuid;
 
@@ -44,9 +43,6 @@ class IPortSMButtonsPlatform {
     
     // Store button mappings from config
     this.buttonMappings = this.config.buttonMappings || [];
-
-    // Initialize HomeKit API
-    this.homekitAPI = new homebridgeAPI();
 
     Service = this.api.hap.Service;
     Characteristic = this.api.hap.Characteristic;
@@ -285,110 +281,82 @@ class IPortSMButtonsPlatform {
   }
 
   // Execute HomeKit scene actions
-  async executeSceneAction(action) {
-    if (!action.targetName) {
-      this.log('No scene specified for action');
-      return;
-    }
-    
-    try {
-      // Get all scenes from HomeKit
-      const scenes = await this.homekitAPI.getScenes();
-      
-      // Find the scene by name
-      const targetScene = scenes.find(scene => scene.displayName === action.targetName);
-      
-      if (!targetScene) {
-        this.log(`Scene "${action.targetName}" not found. Available scenes: ${scenes.map(s => s.displayName).join(', ')}`);
-        return;
-      }
-      
-      // Activate the scene
-      await this.homekitAPI.activateScene(targetScene.uuid);
-      this.log(`Activated scene: ${action.targetName}`);
-      
-    } catch (error) {
-      this.log(`Error activating scene: ${error.message}`);
-    }
+  executeSceneAction(action) {
+    this.log(`Scene action requested: ${action.targetName}`);
+    // For now, we'll just log this as we need to implement scene support differently
+    this.log('Scene support requires additional implementation. Please use accessory control instead.');
   }
 
   // Execute HomeKit accessory actions
-  async executeHomeKitAction(action) {
+  executeHomeKitAction(action) {
     if (!action.targetName) {
       this.log('No accessory specified for action');
       return;
     }
     
-    try {
-      // Get all accessories from HomeKit
-      const accessories = await this.homekitAPI.getAccessories();
-      
-      // Find the accessory by display name
-      const targetAccessory = accessories.find(acc => acc.displayName === action.targetName);
-      
-      if (!targetAccessory) {
-        this.log(`Accessory "${action.targetName}" not found. Available accessories: ${accessories.map(a => a.displayName).join(', ')}`);
-        return;
-      }
-      
-      // Find the appropriate service (try Switch first, then Lightbulb)
-      let service = targetAccessory.getService(Service.Switch);
-      if (!service) {
-        service = targetAccessory.getService(Service.Lightbulb);
-      }
-      
-      if (!service) {
-        this.log(`No Switch or Lightbulb service found on accessory "${action.targetName}"`);
-        return;
-      }
-      
-      // Get the On characteristic
-      const onCharacteristic = service.getCharacteristic(Characteristic.On);
-      if (!onCharacteristic) {
-        this.log(`No On characteristic found on accessory "${action.targetName}"`);
-        return;
-      }
-      
-      // Execute the action
-      switch (action.action) {
-        case 'toggle':
-          const currentState = onCharacteristic.value;
-          await onCharacteristic.setValue(!currentState);
-          this.log(`Toggled ${action.targetName} to ${!currentState ? 'on' : 'off'}`);
-          break;
-        case 'on':
-          await onCharacteristic.setValue(true);
-          this.log(`Turned on ${action.targetName}`);
-          break;
-        case 'off':
-          await onCharacteristic.setValue(false);
-          this.log(`Turned off ${action.targetName}`);
-          break;
-        case 'brightness':
-          if (action.value) {
-            const brightness = parseInt(action.value);
-            if (!isNaN(brightness) && brightness >= 0 && brightness <= 100) {
-              const brightnessCharacteristic = service.getCharacteristic(Characteristic.Brightness);
-              if (brightnessCharacteristic) {
-                await brightnessCharacteristic.setValue(brightness);
-                this.log(`Set brightness of ${action.targetName} to ${brightness}%`);
-              } else {
-                this.log(`No Brightness characteristic found on accessory "${action.targetName}"`);
-              }
+    // Find the accessory by display name in Homebridge
+    const targetAccessory = this.findAccessoryByName(action.targetName);
+    
+    if (!targetAccessory) {
+      this.log(`Accessory "${action.targetName}" not found in Homebridge`);
+      return;
+    }
+    
+    // Find the appropriate service (try Switch first, then Lightbulb)
+    let service = targetAccessory.getService(Service.Switch);
+    if (!service) {
+      service = targetAccessory.getService(Service.Lightbulb);
+    }
+    
+    if (!service) {
+      this.log(`No Switch or Lightbulb service found on accessory "${action.targetName}"`);
+      return;
+    }
+    
+    // Get the On characteristic
+    const onCharacteristic = service.getCharacteristic(Characteristic.On);
+    if (!onCharacteristic) {
+      this.log(`No On characteristic found on accessory "${action.targetName}"`);
+      return;
+    }
+    
+    // Execute the action
+    switch (action.action) {
+      case 'toggle':
+        const currentState = onCharacteristic.value;
+        onCharacteristic.setValue(!currentState);
+        this.log(`Toggled ${action.targetName} to ${!currentState ? 'on' : 'off'}`);
+        break;
+      case 'on':
+        onCharacteristic.setValue(true);
+        this.log(`Turned on ${action.targetName}`);
+        break;
+      case 'off':
+        onCharacteristic.setValue(false);
+        this.log(`Turned off ${action.targetName}`);
+        break;
+      case 'brightness':
+        if (action.value) {
+          const brightness = parseInt(action.value);
+          if (!isNaN(brightness) && brightness >= 0 && brightness <= 100) {
+            const brightnessCharacteristic = service.getCharacteristic(Characteristic.Brightness);
+            if (brightnessCharacteristic) {
+              brightnessCharacteristic.setValue(brightness);
+              this.log(`Set brightness of ${action.targetName} to ${brightness}%`);
+            } else {
+              this.log(`No Brightness characteristic found on accessory "${action.targetName}"`);
             }
           }
-          break;
-        default:
-          this.log(`Unknown action: ${action.action}`);
-      }
-    } catch (error) {
-      this.log(`Error controlling accessory: ${error.message}`);
+        }
+        break;
+      default:
+        this.log(`Unknown action: ${action.action}`);
     }
   }
 
   // Execute LED color change actions
   executeLedAction(action) {
-    if (action.action === 'color' && action.ledColor) {
+    if (action.ledColor) {
       const colorName = action.ledColor.toLowerCase();
       if (this.modeColors[colorName]) {
         const color = this.modeColors[colorName];
@@ -398,6 +366,21 @@ class IPortSMButtonsPlatform {
         this.log(`Unknown color name: ${action.ledColor}`);
       }
     }
+  }
+
+  // Helper method to find an accessory by display name in Homebridge
+  findAccessoryByName(name) {
+    // Get all accessories registered with Homebridge
+    const accessories = this.api.accessories;
+    
+    // Find the accessory with the matching display name
+    for (const accessory of accessories) {
+      if (accessory.displayName === name) {
+        return accessory;
+      }
+    }
+    
+    return null;
   }
 
   setLED(r, g, b) {

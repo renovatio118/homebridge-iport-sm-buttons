@@ -24,6 +24,7 @@ class IPortSMButtonsPlatform {
     this.isShuttingDown = false;
     this.keepAliveInterval = null;
     this.eventQueue = []; // Queue for events before services are ready
+    this.lastLoggedColor = null; // Track last logged LED color
 
     Service = this.api.hap.Service;
     Characteristic = this.api.hap.Characteristic;
@@ -85,17 +86,27 @@ class IPortSMButtonsPlatform {
             if (ledValue) {
               try {
                 let value = ledValue;
+                let newR, newG, newB;
+                
                 if (value.startsWith('#')) {
                   value = value.slice(1);
-                  this.ledColor.r = parseInt(value.substr(0, 2), 16);
-                  this.ledColor.g = parseInt(value.substr(2, 2), 16);
-                  this.ledColor.b = parseInt(value.substr(4, 2), 16);
+                  newR = parseInt(value.substr(0, 2), 16);
+                  newG = parseInt(value.substr(2, 2), 16);
+                  newB = parseInt(value.substr(4, 2), 16);
                 } else {
-                  this.ledColor.r = parseInt(value.substr(0, 3));
-                  this.ledColor.g = parseInt(value.substr(3, 3));
-                  this.ledColor.b = parseInt(value.substr(6, 3));
+                  newR = parseInt(value.substr(0, 3));
+                  newG = parseInt(value.substr(3, 3));
+                  newB = parseInt(value.substr(6, 3));
                 }
-                this.log(`LED color updated: ${this.ledColor.r},${this.ledColor.g},${this.ledColor.b}`);
+                
+                // Check if the color has changed
+                const newColor = `${newR},${newG},${newB}`;
+                if (this.lastLoggedColor !== newColor) {
+                  this.log(`LED color updated: ${newColor}`);
+                  this.lastLoggedColor = newColor;
+                }
+                
+                this.ledColor = { r: newR, g: newG, b: newB };
                 this.updateLightCharacteristics();
               } catch (e) {
                 this.log(`LED parse error: ${e.message}`);
@@ -181,7 +192,7 @@ class IPortSMButtonsPlatform {
   queryLED() {
     if (!this.connected || this.isShuttingDown) return;
     this.socket.write('\rled=?\r');
-    this.log('Queried LED state');
+    // this.log('Queried LED state'); // Commented out to reduce log noise
   }
 
   rgbToHsv(r, g, b) {

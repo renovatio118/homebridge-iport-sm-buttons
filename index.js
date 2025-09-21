@@ -13,7 +13,7 @@ class IPortSMButtonsPlatform {
     this.api = api;
     this.ip = this.config.ip || '192.168.2.12';
     this.port = this.config.port || 10001;
-    this.timeout = this.config.timeout || 5000;
+    this.timeout = this.config.timeout || 10000; // Increased to 10 seconds
     this.reconnectDelay = this.config.reconnectDelay || 5000;
     this.buttonServices = [];
     this.buttonStates = Array.from({ length: 10 }, () => ({ state: 0, timer: null, lastPress: 0 }));
@@ -22,6 +22,7 @@ class IPortSMButtonsPlatform {
     this.socket = null;
     this.isPublishing = false;
     this.isShuttingDown = false;
+    this.keepAliveInterval = null;
 
     Service = this.api.hap.Service;
     Characteristic = this.api.hap.Characteristic;
@@ -34,12 +35,13 @@ class IPortSMButtonsPlatform {
     this.api.on('shutdown', () => {
       this.isShuttingDown = true;
       this.log('Homebridge shutting down, delaying socket close');
+      if (this.keepAliveInterval) clearInterval(this.keepAliveInterval);
       setTimeout(() => {
         if (this.socket) {
           this.socket.destroy();
           this.log('Socket closed');
         }
-      }, 1000); // Delay to allow pending operations
+      }, 2000); // Increased to 2 seconds
     });
   }
 
@@ -53,6 +55,12 @@ class IPortSMButtonsPlatform {
       this.connected = true;
       this.queryLED();
       if (this.accessory && !this.isShuttingDown) this.accessory.updateReachability(true);
+      // Start keep-alive interval
+      if (!this.keepAliveInterval) {
+        this.keepAliveInterval = setInterval(() => {
+          if (this.connected && !this.isShuttingDown) this.queryLED();
+        }, 5000); // Query every 5 seconds
+      }
     });
 
     this.socket.on('data', (data) => {
@@ -106,7 +114,7 @@ class IPortSMButtonsPlatform {
     });
 
     this.socket.on('error', (err) => {
-      this.log(`Error on ${this.port}: ${err.message}`);
+      this.log(`Socket error on ${this.port}: ${err.message}`);
       this.socket.destroy();
       this.connected = false;
       if (this.accessory && !this.isShuttingDown) this.accessory.updateReachability(false);
@@ -117,6 +125,7 @@ class IPortSMButtonsPlatform {
       this.log('Connection closed');
       this.connected = false;
       if (this.accessory && !this.isShuttingDown) this.accessory.updateReachability(false);
+      if (this.keepAliveInterval) clearInterval(this.keepAliveInterval);
       if (!this.isShuttingDown) setTimeout(() => this.connect(), this.reconnectDelay);
     });
 

@@ -1,28 +1,28 @@
-const net = require('net');
-
-let Service, Characteristic;
+let Service, Characteristic, Accessory, uuid;
 
 module.exports = (api) => {
-  Service = api.hap.Service;
-  Characteristic = api.hap.Characteristic;
   api.registerPlatform('IPortSMButtons', IPortSMButtonsPlatform);
 };
 
 class IPortSMButtonsPlatform {
   constructor(log, config, api) {
     this.log = log;
-    this.api = api;
     this.config = config || {};
-    this.ip = config.ip || '192.168.2.12';
-    this.port = config.port || 10001;
+    this.api = api;
+    this.ip = this.config.ip || '192.168.2.12';
+    this.port = this.config.port || 10001;
+    this.timeout = this.config.timeout || 5000;
+    this.reconnectDelay = this.config.reconnectDelay || 5000;
     this.accessories = [];
     this.buttonStates = Array.from({ length: 10 }, () => ({ state: 0, timer: null, lastPress: 0 }));
-    this.ledColor = { r: 255, g: 255, b: 255 }; // Default white
-    this.socket = null;
+    this.ledColor = { r: 255, g: 255, b: 255 };
     this.connected = false;
-    this.connectAttempts = 0;
-    this.maxAttemptsPerCycle = 1; // Stick to 10001 since it works
-    this.accessory = null;
+    this.socket = null;
+
+    Service = this.api.hap.Service;
+    Characteristic = this.api.hap.Characteristic;
+    Accessory = this.api.platformAccessory;
+    uuid = this.api.hap.uuid;
 
     this.log('IPortSMButtonsPlatform initialized');
     this.connect();
@@ -31,18 +31,13 @@ class IPortSMButtonsPlatform {
   connect() {
     this.log(`Attempting connection to ${this.ip}:${this.port}`);
     this.socket = new net.Socket();
-    this.socket.setTimeout(5000);
+    this.socket.setTimeout(this.timeout);
 
     this.socket.connect(this.port, this.ip, () => {
       this.log(`Connected to ${this.ip}:${this.port}`);
       this.connected = true;
-      this.connectAttempts = 0;
-      try {
-        this.queryLED();
-      } catch (e) {
-        this.log(`Error querying LED: ${e.message}`);
-      }
-      if (this.accessory) this.accessory.updateReachability(true);
+      this.queryLED();
+      this.accessories.forEach(acc => acc.updateReachability(true));
     });
 
     this.socket.on('data', (data) => {
@@ -93,16 +88,15 @@ class IPortSMButtonsPlatform {
       this.log(`Error on ${this.port}: ${err.message}`);
       this.socket.destroy();
       this.connected = false;
-      this.connectAttempts++;
-      if (this.accessory) this.accessory.updateReachability(false);
-      setTimeout(() => this.connect(), 5000);
+      this.accessories.forEach(acc => acc.updateReachability(false));
+      setTimeout(() => this.connect(), this.reconnectDelay);
     });
 
     this.socket.on('close', () => {
       this.log('Connection closed');
       this.connected = false;
-      if (this.accessory) this.accessory.updateReachability(false);
-      setTimeout(() => this.connect(), 5000);
+      this.accessories.forEach(acc => acc.updateReachability(false));
+      setTimeout(() => this.connect(), this.reconnectDelay);
     });
 
     this.socket.on('timeout', () => {
@@ -110,8 +104,6 @@ class IPortSMButtonsPlatform {
       this.socket.destroy();
     });
   }
-
-  // ... (handleButtonEvent, triggerButtonEvent, setLED, queryLED, rgbToHsv, hsvToRgb, updateLightCharacteristics methods remain the same as in the previous version)
 
   handleButtonEvent(buttonIndex, state) {
     if (!this.connected) return;
@@ -218,14 +210,15 @@ class IPortSMButtonsPlatform {
   accessories(callback) {
     try {
       this.log('Starting accessories setup');
-      const uuid = this.api.hap.uuid.generate(this.config.name || 'iPort SM Buttons');
-      this.accessory = new this.api.platformAccessory(this.config.name || 'iPort SM Buttons', uuid);
+      const uuidStr = uuid.generate(this.config.name || 'iPort SM Buttons');
+      this.accessory = new Accessory(this.config.name || 'iPort SM Buttons', uuidStr);
 
       // Service Label
       const serviceLabel = this.accessory.addService(Service.ServiceLabel);
       serviceLabel.setCharacteristic(Characteristic.ServiceLabelNamespace, 1);
 
       // Buttons
+      this.accessories = [];
       for (let i = 1; i <= 10; i++) {
         const buttonService = this.accessory.addService(Service.StatelessProgrammableSwitch, `Button ${i}`, `button${i}`);
         buttonService.setCharacteristic(Characteristic.ServiceLabelIndex, i);
@@ -236,7 +229,7 @@ class IPortSMButtonsPlatform {
       this.lightService = this.accessory.addService(Service.Lightbulb, 'LED');
       this.lightService.setCharacteristic(Characteristic.On, true);
 
-      // Bind handlers with connection check
+      // Bind handlers
       this.lightService.getCharacteristic(Characteristic.On)
         .onGet(() => {
           if (!this.connected) throw new Error('Device not connected');
@@ -303,12 +296,26 @@ class IPortSMButtonsPlatform {
       callback([this.accessory]);
     } catch (e) {
       this.log(`Error in accessories setup: ${e.message}`);
-      callback([]); // Return empty to prevent Homebridge crash
+      callback([]); // Prevent crash
     }
   }
 
-  // Required method to fix TypeError (even empty)
   configurePlatformAccessory(accessory) {
-    // No-op for dynamic accessories; Homebridge expects this method
+    // Handle cached accessories (inspired by LIFX)
+    this.log('Configuring cached accessory');
+    accessory.updateReachability(this.connected);
+    this.accessory = accessory;
+    // Re-bind services if needed
+    this.accessories = [];
+    accessory.services.forEach(service => {
+      if (service.subtype && service.subtype.startsWith('button')) {
+        const index = parseInt(service.subtype.replace('button', '')) - 1;
+        this.accessories[index] = service;
+      } else if (service.name === 'LED') {
+        this.lightService = service;
+      }
+    });
   }
 }
+
+const net = require('net'); // Moved to top

@@ -21,7 +21,7 @@ class IPortSMButtonsPlatform {
     this.socket = null;
     this.connected = false;
     this.connectAttempts = 0;
-    this.maxAttemptsPerCycle = 2; // Try 10001, then 80
+    this.maxAttemptsPerCycle = 1; // Stick to 10001 since it works now
     this.accessory = null;
 
     // Start connection in background
@@ -29,16 +29,19 @@ class IPortSMButtonsPlatform {
   }
 
   connect() {
-    const currentPort = this.connectAttempts % this.maxAttemptsPerCycle === 0 ? this.port : 80;
-    this.log(`Attempting connection to ${this.ip}:${currentPort}`);
+    this.log(`Attempting connection to ${this.ip}:${this.port}`);
     this.socket = new net.Socket();
     this.socket.setTimeout(5000);
 
-    this.socket.connect(currentPort, this.ip, () => {
-      this.log(`Connected to ${this.ip}:${currentPort}`);
+    this.socket.connect(this.port, this.ip, () => {
+      this.log(`Connected to ${this.ip}:${this.port}`);
       this.connected = true;
       this.connectAttempts = 0;
-      this.queryLED();
+      try {
+        this.queryLED();
+      } catch (e) {
+        this.log(`Error querying LED: ${e.message}`);
+      }
       if (this.accessory) this.accessory.updateReachability(true);
     });
 
@@ -46,7 +49,6 @@ class IPortSMButtonsPlatform {
       const str = data.toString().trim();
       this.log(`Received: ${str}`);
       if (str.startsWith('led=')) {
-        // Parse LED response
         let value = str.slice(4);
         if (value.startsWith('#')) {
           value = value.slice(1);
@@ -58,6 +60,7 @@ class IPortSMButtonsPlatform {
           this.ledColor.g = parseInt(value.substr(3, 3));
           this.ledColor.b = parseInt(value.substr(6, 3));
         }
+        this.log(`LED color updated: ${this.ledColor.r},${this.ledColor.g},${this.ledColor.b}`);
         this.updateLightCharacteristics();
       } else {
         try {
@@ -76,7 +79,7 @@ class IPortSMButtonsPlatform {
     });
 
     this.socket.on('error', (err) => {
-      this.log(`Error on ${currentPort}: ${err.message}`);
+      this.log(`Error on ${this.port}: ${err.message}`);
       this.socket.destroy();
       this.connected = false;
       this.connectAttempts++;
@@ -97,10 +100,100 @@ class IPortSMButtonsPlatform {
     });
   }
 
-  // ... (handleButtonEvent, triggerButtonEvent, setLED, queryLED, rgbToHsv, hsvToRgb unchanged from previous version)
+  handleButtonEvent(buttonIndex, state) {
+    if (!this.connected) return;
+    const service = this.accessories[buttonIndex];
+    if (!service) return;
+    const now = Date.now();
+    const bs = this.buttonStates[buttonIndex];
+
+    if (state === 1) {
+      if (bs.state === 0) {
+        bs.state = 1;
+        if (now - bs.lastPress < 500) {
+          this.triggerButtonEvent(buttonIndex, 1); // Double press
+        } else {
+          bs.timer = setTimeout(() => {
+            this.triggerButtonEvent(buttonIndex, 2); // Long press
+            bs.timer = null;
+          }, 800);
+        }
+        bs.lastPress = now;
+      }
+    } else if (state === 0) {
+      if (bs.state === 1) {
+        bs.state = 0;
+        if (bs.timer) {
+          clearTimeout(bs.timer);
+          bs.timer = null;
+          this.triggerButtonEvent(buttonIndex, 0); // Single press
+        }
+      }
+    }
+  }
+
+  triggerButtonEvent(buttonIndex, eventType) {
+    const service = this.accessories[buttonIndex];
+    service.updateCharacteristic(Characteristic.ProgrammableSwitchEvent, eventType);
+    const typeStr = eventType === 0 ? 'single' : eventType === 1 ? 'double' : 'long';
+    this.log(`Button ${buttonIndex + 1} triggered ${typeStr} press`);
+  }
+
+  setLED(r, g, b) {
+    if (!this.connected) return;
+    const cmd = `\rled=${r.toString().padStart(3, '0')}${g.toString().padStart(3, '0')}${b.toString().padStart(3, '0')}\r`;
+    this.socket.write(cmd);
+    this.ledColor = { r, g, b };
+    this.log(`Set LED to ${r},${g},${b}`);
+  }
+
+  queryLED() {
+    if (!this.connected) return;
+    this.socket.write('\rled=?\r');
+    this.log('Queried LED state');
+  }
+
+  rgbToHsv(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const v = max;
+    const d = max - min;
+    const s = max === 0 ? 0 : d / max;
+    let h;
+    if (max === min) h = 0;
+    else {
+      switch (max) {
+        case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+        case g: h = (b - r) / d + 2; break;
+        case b: h = (r - g) / d + 4; break;
+      }
+      h /= 6;
+    }
+    return { h: h * 360, s: s * 100, v: v * 100 };
+  }
+
+  hsvToRgb(h, s, v) {
+    h /= 360; s /= 100; v /= 100;
+    let r, g, b;
+    const i = Math.floor(h * 6);
+    const f = h * 6 - i;
+    const p = v * (1 - s);
+    const q = v * (1 - f * s);
+    const t = v * (1 - (1 - f) * s);
+    switch (i % 6) {
+      case 0: r = v; g = t; b = p; break;
+      case 1: r = q; g = v; b = p; break;
+      case 2: r = p; g = v; b = t; break;
+      case 3: r = p; g = q; b = v; break;
+      case 4: r = t; g = p; b = v; break;
+      case 5: r = v; g = p; b = q; break;
+    }
+    return { r: Math.round(r * 255), g: Math.round(g * 255), b: Math.round(b * 255) };
+  }
 
   updateLightCharacteristics() {
-    if (!this.lightService) return;
+    if (!this.lightService || !this.connected) return;
     const hsv = this.rgbToHsv(this.ledColor.r, this.ledColor.g, this.ledColor.b);
     this.lightService
       .updateCharacteristic(Characteristic.On, hsv.v > 0)
@@ -128,7 +221,7 @@ class IPortSMButtonsPlatform {
     this.lightService = this.accessory.addService(Service.Lightbulb, 'LED');
     this.lightService.setCharacteristic(Characteristic.On, true);
 
-    // Bind handlers with checks for connection
+    // Bind handlers with connection check
     this.lightService.getCharacteristic(Characteristic.On)
       .onGet(() => {
         if (!this.connected) throw new Error('Device not connected');
@@ -145,8 +238,6 @@ class IPortSMButtonsPlatform {
           this.setLED(0, 0, 0);
         }
       });
-
-    // Similar for Brightness, Hue, Saturation (add !connected check and throw error)
 
     this.lightService.getCharacteristic(Characteristic.Brightness)
       .onGet(() => {

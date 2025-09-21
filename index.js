@@ -12,74 +12,109 @@ class IPortSMButtonsPlatform {
   constructor(log, config, api) {
     this.log = log;
     this.api = api;
-    this.config = config;
+    this.config = config || {};
     this.ip = config.ip || '192.168.2.12';
     this.port = config.port || 10001;
-    this.accessories = []; // Will store button services
+    this.accessories = [];
     this.buttonStates = Array.from({ length: 10 }, () => ({ state: 0, timer: null, lastPress: 0 }));
     this.ledColor = { r: 255, g: 255, b: 255 }; // Default white
     this.socket = null;
+    this.connected = false;
+    this.connectAttempts = 0;
+    this.maxAttemptsPerCycle = 1; // Stick to 10001 since it works
+    this.accessory = null;
+
+    this.log('IPortSMButtonsPlatform initialized');
     this.connect();
   }
 
   connect() {
+    this.log(`Attempting connection to ${this.ip}:${this.port}`);
     this.socket = new net.Socket();
+    this.socket.setTimeout(5000);
+
     this.socket.connect(this.port, this.ip, () => {
       this.log(`Connected to ${this.ip}:${this.port}`);
-      this.queryLED(); // Get initial LED state
+      this.connected = true;
+      this.connectAttempts = 0;
+      try {
+        this.queryLED();
+      } catch (e) {
+        this.log(`Error querying LED: ${e.message}`);
+      }
+      if (this.accessory) this.accessory.updateReachability(true);
     });
 
     this.socket.on('data', (data) => {
       const str = data.toString().trim();
-      if (str.startsWith('led=')) {
-        // Parse LED query response
-        let value = str.slice(4);
-        if (value.startsWith('#')) {
-          value = value.slice(1);
-          this.ledColor.r = parseInt(value.substr(0, 2), 16);
-          this.ledColor.g = parseInt(value.substr(2, 2), 16);
-          this.ledColor.b = parseInt(value.substr(4, 2), 16);
-        } else {
-          this.ledColor.r = parseInt(value.substr(0, 3));
-          this.ledColor.g = parseInt(value.substr(3, 3));
-          this.ledColor.b = parseInt(value.substr(6, 3));
-        }
-        this.log(`Received LED color: ${this.ledColor.r},${this.ledColor.g},${this.ledColor.b}`);
-        // Update HomeKit light state
-        const hsv = this.rgbToHsv(this.ledColor.r, this.ledColor.g, this.ledColor.b);
-        this.lightService
-          .updateCharacteristic(Characteristic.On, hsv.v > 0)
-          .updateCharacteristic(Characteristic.Hue, hsv.h)
-          .updateCharacteristic(Characteristic.Saturation, hsv.s)
-          .updateCharacteristic(Characteristic.Brightness, hsv.v);
-      } else {
-        try {
-          const json = JSON.parse(str);
-          if (json.events) {
-            json.events.forEach((event) => {
-              const keyNum = parseInt(event.label.split(' ')[1], 10);
-              const buttonIndex = keyNum - 1;
-              const state = parseInt(event.state, 10);
-              this.handleButtonEvent(buttonIndex, state);
-            });
+      this.log(`Received raw: ${str}`);
+      const parts = str.split('led=');
+      parts.forEach((part, index) => {
+        if (index === 0 && part.trim()) {
+          try {
+            const json = JSON.parse(part);
+            if (json.events) {
+              json.events.forEach((event) => {
+                const keyNum = parseInt(event.label.split(' ')[1], 10) - 1;
+                const state = parseInt(event.state, 10);
+                this.handleButtonEvent(keyNum, state);
+              });
+            }
+          } catch (e) {
+            this.log(`JSON parse error: ${e.message}`);
           }
-        } catch (e) {
-          this.log(`Error parsing data: ${e.message}`);
         }
-      }
-    });
-
-    this.socket.on('close', () => {
-      this.log('Connection closed, reconnecting in 5s...');
-      setTimeout(() => this.connect(), 5000);
+        if (index > 0 || (index === 0 && !part.trim() && parts.length > 1)) {
+          const ledValue = part.trim();
+          if (ledValue) {
+            try {
+              let value = ledValue;
+              if (value.startsWith('#')) {
+                value = value.slice(1);
+                this.ledColor.r = parseInt(value.substr(0, 2), 16);
+                this.ledColor.g = parseInt(value.substr(2, 2), 16);
+                this.ledColor.b = parseInt(value.substr(4, 2), 16);
+              } else {
+                this.ledColor.r = parseInt(value.substr(0, 3));
+                this.ledColor.g = parseInt(value.substr(3, 3));
+                this.ledColor.b = parseInt(value.substr(6, 3));
+              }
+              this.log(`LED color updated: ${this.ledColor.r},${this.ledColor.g},${this.ledColor.b}`);
+              this.updateLightCharacteristics();
+            } catch (e) {
+              this.log(`LED parse error: ${e.message}`);
+            }
+          }
+        }
+      });
     });
 
     this.socket.on('error', (err) => {
-      this.log(`Socket error: ${err.message}`);
+      this.log(`Error on ${this.port}: ${err.message}`);
+      this.socket.destroy();
+      this.connected = false;
+      this.connectAttempts++;
+      if (this.accessory) this.accessory.updateReachability(false);
+      setTimeout(() => this.connect(), 5000);
+    });
+
+    this.socket.on('close', () => {
+      this.log('Connection closed');
+      this.connected = false;
+      if (this.accessory) this.accessory.updateReachability(false);
+      setTimeout(() => this.connect(), 5000);
+    });
+
+    this.socket.on('timeout', () => {
+      this.log('Connection timeout');
+      this.socket.destroy();
     });
   }
 
+  // ... (handleButtonEvent, triggerButtonEvent, setLED, queryLED, rgbToHsv, hsvToRgb, updateLightCharacteristics methods remain the same as in the previous version)
+
   handleButtonEvent(buttonIndex, state) {
+    if (!this.connected) return;
     const service = this.accessories[buttonIndex];
     if (!service) return;
     const now = Date.now();
@@ -87,13 +122,10 @@ class IPortSMButtonsPlatform {
 
     if (state === 1) {
       if (bs.state === 0) {
-        // New press
         bs.state = 1;
         if (now - bs.lastPress < 500) {
-          // Double press
           this.triggerButtonEvent(buttonIndex, 1); // Double press
         } else {
-          // Start long press timer
           bs.timer = setTimeout(() => {
             this.triggerButtonEvent(buttonIndex, 2); // Long press
             bs.timer = null;
@@ -101,17 +133,14 @@ class IPortSMButtonsPlatform {
         }
         bs.lastPress = now;
       }
-      // Ignore repeats
     } else if (state === 0) {
       if (bs.state === 1) {
-        // Release
         bs.state = 0;
         if (bs.timer) {
           clearTimeout(bs.timer);
           bs.timer = null;
           this.triggerButtonEvent(buttonIndex, 0); // Single press
         }
-        // If long press already triggered, ignore
       }
     }
   }
@@ -124,6 +153,7 @@ class IPortSMButtonsPlatform {
   }
 
   setLED(r, g, b) {
+    if (!this.connected) return;
     const cmd = `\rled=${r.toString().padStart(3, '0')}${g.toString().padStart(3, '0')}${b.toString().padStart(3, '0')}\r`;
     this.socket.write(cmd);
     this.ledColor = { r, g, b };
@@ -131,6 +161,7 @@ class IPortSMButtonsPlatform {
   }
 
   queryLED() {
+    if (!this.connected) return;
     this.socket.write('\rled=?\r');
     this.log('Queried LED state');
   }
@@ -143,9 +174,8 @@ class IPortSMButtonsPlatform {
     const d = max - min;
     const s = max === 0 ? 0 : d / max;
     let h;
-    if (max === min) {
-      h = 0;
-    } else {
+    if (max === min) h = 0;
+    else {
       switch (max) {
         case r: h = (g - b) / d + (g < b ? 6 : 0); break;
         case g: h = (b - r) / d + 2; break;
@@ -175,77 +205,110 @@ class IPortSMButtonsPlatform {
     return { r: Math.round(r * 255), g: Math.round(g * 255), b: Math.round(b * 255) };
   }
 
+  updateLightCharacteristics() {
+    if (!this.lightService || !this.connected) return;
+    const hsv = this.rgbToHsv(this.ledColor.r, this.ledColor.g, this.ledColor.b);
+    this.lightService
+      .updateCharacteristic(Characteristic.On, hsv.v > 0)
+      .updateCharacteristic(Characteristic.Hue, hsv.h)
+      .updateCharacteristic(Characteristic.Saturation, hsv.s)
+      .updateCharacteristic(Characteristic.Brightness, hsv.v);
+  }
+
   accessories(callback) {
-    const uuid = this.api.hap.uuid.generate(this.config.name || 'iPort SM Buttons');
-    const accessory = new this.api.platformAccessory(this.config.name || 'iPort SM Buttons', uuid);
+    try {
+      this.log('Starting accessories setup');
+      const uuid = this.api.hap.uuid.generate(this.config.name || 'iPort SM Buttons');
+      this.accessory = new this.api.platformAccessory(this.config.name || 'iPort SM Buttons', uuid);
 
-    // Service Label for grouping buttons
-    const serviceLabel = accessory.addService(Service.ServiceLabel);
-    serviceLabel.setCharacteristic(Characteristic.ServiceLabelNamespace, 1); // ARABIC_NUMERALS
+      // Service Label
+      const serviceLabel = this.accessory.addService(Service.ServiceLabel);
+      serviceLabel.setCharacteristic(Characteristic.ServiceLabelNamespace, 1);
 
-    // Add 10 buttons
-    for (let i = 1; i <= 10; i++) {
-      const buttonService = accessory.addService(Service.StatelessProgrammableSwitch, `Button ${i}`, `button${i}`);
-      buttonService.setCharacteristic(Characteristic.ServiceLabelIndex, i);
-      this.accessories[i - 1] = buttonService;
-    }
+      // Buttons
+      for (let i = 1; i <= 10; i++) {
+        const buttonService = this.accessory.addService(Service.StatelessProgrammableSwitch, `Button ${i}`, `button${i}`);
+        buttonService.setCharacteristic(Characteristic.ServiceLabelIndex, i);
+        this.accessories[i - 1] = buttonService;
+      }
 
-    // Add LED as Lightbulb
-    this.lightService = accessory.addService(Service.Lightbulb, 'LED');
-    this.lightService.setCharacteristic(Characteristic.On, true);
+      // LED Light
+      this.lightService = this.accessory.addService(Service.Lightbulb, 'LED');
+      this.lightService.setCharacteristic(Characteristic.On, true);
 
-    this.lightService.getCharacteristic(Characteristic.On)
-      .onGet(() => {
-        const hsv = this.rgbToHsv(this.ledColor.r, this.ledColor.g, this.ledColor.b);
-        return hsv.v > 0;
-      })
-      .onSet((value) => {
-        if (value) {
-          if (this.ledColor.r === 0 && this.ledColor.g === 0 && this.ledColor.b === 0) {
-            // Default to full white if turning on from off
-            this.setLED(255, 255, 255);
+      // Bind handlers with connection check
+      this.lightService.getCharacteristic(Characteristic.On)
+        .onGet(() => {
+          if (!this.connected) throw new Error('Device not connected');
+          const hsv = this.rgbToHsv(this.ledColor.r, this.ledColor.g, this.ledColor.b);
+          return hsv.v > 0;
+        })
+        .onSet((value) => {
+          if (!this.connected) throw new Error('Device not connected');
+          if (value) {
+            if (this.ledColor.r === 0 && this.ledColor.g === 0 && this.ledColor.b === 0) {
+              this.setLED(255, 255, 255);
+            }
+          } else {
+            this.setLED(0, 0, 0);
           }
-        } else {
-          this.setLED(0, 0, 0);
-        }
-      });
+        });
 
-    this.lightService.getCharacteristic(Characteristic.Brightness)
-      .onGet(() => {
-        const hsv = this.rgbToHsv(this.ledColor.r, this.ledColor.g, this.ledColor.b);
-        return hsv.v;
-      })
-      .onSet((value) => {
-        const h = this.lightService.getCharacteristic(Characteristic.Hue).value;
-        const s = this.lightService.getCharacteristic(Characteristic.Saturation).value;
-        const { r, g, b } = this.hsvToRgb(h, s, value);
-        this.setLED(r, g, b);
-      });
+      this.lightService.getCharacteristic(Characteristic.Brightness)
+        .onGet(() => {
+          if (!this.connected) throw new Error('Device not connected');
+          const hsv = this.rgbToHsv(this.ledColor.r, this.ledColor.g, this.ledColor.b);
+          return hsv.v;
+        })
+        .onSet((value) => {
+          if (!this.connected) throw new Error('Device not connected');
+          const h = this.lightService.getCharacteristic(Characteristic.Hue).value;
+          const s = this.lightService.getCharacteristic(Characteristic.Saturation).value;
+          const { r, g, b } = this.hsvToRgb(h, s, value);
+          this.setLED(r, g, b);
+        });
 
-    this.lightService.getCharacteristic(Characteristic.Hue)
-      .onGet(() => {
-        const hsv = this.rgbToHsv(this.ledColor.r, this.ledColor.g, this.ledColor.b);
-        return hsv.h;
-      })
-      .onSet((value) => {
-        const s = this.lightService.getCharacteristic(Characteristic.Saturation).value;
-        const v = this.lightService.getCharacteristic(Characteristic.Brightness).value;
-        const { r, g, b } = this.hsvToRgb(value, s, v);
-        this.setLED(r, g, b);
-      });
+      this.lightService.getCharacteristic(Characteristic.Hue)
+        .onGet(() => {
+          if (!this.connected) throw new Error('Device not connected');
+          const hsv = this.rgbToHsv(this.ledColor.r, this.ledColor.g, this.ledColor.b);
+          return hsv.h;
+        })
+        .onSet((value) => {
+          if (!this.connected) throw new Error('Device not connected');
+          const s = this.lightService.getCharacteristic(Characteristic.Saturation).value;
+          const v = this.lightService.getCharacteristic(Characteristic.Brightness).value;
+          const { r, g, b } = this.hsvToRgb(value, s, v);
+          this.setLED(r, g, b);
+        });
 
-    this.lightService.getCharacteristic(Characteristic.Saturation)
-      .onGet(() => {
-        const hsv = this.rgbToHsv(this.ledColor.r, this.ledColor.g, this.ledColor.b);
-        return hsv.s;
-      })
-      .onSet((value) => {
-        const h = this.lightService.getCharacteristic(Characteristic.Hue).value;
-        const v = this.lightService.getCharacteristic(Characteristic.Brightness).value;
-        const { r, g, b } = this.hsvToRgb(h, value, v);
-        this.setLED(r, g, b);
-      });
+      this.lightService.getCharacteristic(Characteristic.Saturation)
+        .onGet(() => {
+          if (!this.connected) throw new Error('Device not connected');
+          const hsv = this.rgbToHsv(this.ledColor.r, this.ledColor.g, this.ledColor.b);
+          return hsv.s;
+        })
+        .onSet((value) => {
+          if (!this.connected) throw new Error('Device not connected');
+          const h = this.lightService.getCharacteristic(Characteristic.Hue).value;
+          const v = this.lightService.getCharacteristic(Characteristic.Brightness).value;
+          const { r, g, b } = this.hsvToRgb(h, value, v);
+          this.setLED(r, g, b);
+        });
 
-    callback([accessory]);
+      // Initial reachability
+      this.accessory.updateReachability(this.connected);
+
+      this.log('Accessories setup completed, publishing accessory');
+      callback([this.accessory]);
+    } catch (e) {
+      this.log(`Error in accessories setup: ${e.message}`);
+      callback([]); // Return empty to prevent Homebridge crash
+    }
+  }
+
+  // Required method to fix TypeError (even empty)
+  configurePlatformAccessory(accessory) {
+    // No-op for dynamic accessories; Homebridge expects this method
   }
 }

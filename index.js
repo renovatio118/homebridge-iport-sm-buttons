@@ -21,6 +21,7 @@ class IPortSMButtonsPlatform {
     this.connected = false;
     this.socket = null;
     this.isPublishing = false;
+    this.isShuttingDown = false;
 
     Service = this.api.hap.Service;
     Characteristic = this.api.hap.Characteristic;
@@ -31,10 +32,14 @@ class IPortSMButtonsPlatform {
     this.connect();
 
     this.api.on('shutdown', () => {
-      this.log('Homebridge shutting down, closing socket');
-      if (this.socket) {
-        this.socket.destroy();
-      }
+      this.isShuttingDown = true;
+      this.log('Homebridge shutting down, delaying socket close');
+      setTimeout(() => {
+        if (this.socket) {
+          this.socket.destroy();
+          this.log('Socket closed');
+        }
+      }, 1000); // Delay to allow pending operations
     });
   }
 
@@ -47,10 +52,11 @@ class IPortSMButtonsPlatform {
       this.log(`Connected to ${this.ip}:${this.port}`);
       this.connected = true;
       this.queryLED();
-      if (this.accessory) this.accessory.updateReachability(true);
+      if (this.accessory && !this.isShuttingDown) this.accessory.updateReachability(true);
     });
 
     this.socket.on('data', (data) => {
+      if (this.isShuttingDown) return;
       const str = data.toString().trim();
       this.log(`Received raw: ${str}`);
       const parts = str.split('led=');
@@ -103,15 +109,15 @@ class IPortSMButtonsPlatform {
       this.log(`Error on ${this.port}: ${err.message}`);
       this.socket.destroy();
       this.connected = false;
-      if (this.accessory) this.accessory.updateReachability(false);
-      setTimeout(() => this.connect(), this.reconnectDelay);
+      if (this.accessory && !this.isShuttingDown) this.accessory.updateReachability(false);
+      if (!this.isShuttingDown) setTimeout(() => this.connect(), this.reconnectDelay);
     });
 
     this.socket.on('close', () => {
       this.log('Connection closed');
       this.connected = false;
-      if (this.accessory) this.accessory.updateReachability(false);
-      setTimeout(() => this.connect(), this.reconnectDelay);
+      if (this.accessory && !this.isShuttingDown) this.accessory.updateReachability(false);
+      if (!this.isShuttingDown) setTimeout(() => this.connect(), this.reconnectDelay);
     });
 
     this.socket.on('timeout', () => {
@@ -121,7 +127,7 @@ class IPortSMButtonsPlatform {
   }
 
   handleButtonEvent(buttonIndex, state) {
-    if (!this.connected) return;
+    if (!this.connected || this.isShuttingDown) return;
     const service = this.buttonServices[buttonIndex];
     if (!service) return;
     const now = Date.now();
@@ -153,6 +159,7 @@ class IPortSMButtonsPlatform {
   }
 
   triggerButtonEvent(buttonIndex, eventType) {
+    if (this.isShuttingDown) return;
     const service = this.buttonServices[buttonIndex];
     service.updateCharacteristic(Characteristic.ProgrammableSwitchEvent, eventType);
     const typeStr = eventType === 0 ? 'single' : eventType === 1 ? 'double' : 'long';
@@ -160,7 +167,7 @@ class IPortSMButtonsPlatform {
   }
 
   setLED(r, g, b) {
-    if (!this.connected) return;
+    if (!this.connected || this.isShuttingDown) return;
     const cmd = `\rled=${r.toString().padStart(3, '0')}${g.toString().padStart(3, '0')}${b.toString().padStart(3, '0')}\r`;
     this.socket.write(cmd);
     this.ledColor = { r, g, b };
@@ -168,7 +175,7 @@ class IPortSMButtonsPlatform {
   }
 
   queryLED() {
-    if (!this.connected) return;
+    if (!this.connected || this.isShuttingDown) return;
     this.socket.write('\rled=?\r');
     this.log('Queried LED state');
   }
@@ -213,7 +220,7 @@ class IPortSMButtonsPlatform {
   }
 
   updateLightCharacteristics() {
-    if (!this.lightService || !this.connected) return;
+    if (!this.lightService || !this.connected || this.isShuttingDown) return;
     const hsv = this.rgbToHsv(this.ledColor.r, this.ledColor.g, this.ledColor.b);
     this.lightService
       .updateCharacteristic(Characteristic.On, hsv.v > 0)
@@ -227,6 +234,7 @@ class IPortSMButtonsPlatform {
       this.log('Starting accessories setup');
       const uuidStr = uuid.generate(this.config.name || 'iPort SM Buttons');
       this.accessory = new Accessory(this.config.name || 'iPort SM Buttons', uuidStr);
+      this.accessory.publish({ port: 43715 }); // Pre-publish to avoid setupURI error
 
       // Service Label
       const serviceLabel = this.accessory.addService(Service.ServiceLabel);

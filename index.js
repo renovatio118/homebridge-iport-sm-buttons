@@ -1,4 +1,5 @@
 const net = require('net');
+const homebridgeAPI = require('homebridge-api');
 
 let Service, Characteristic, Accessory, uuid;
 
@@ -37,8 +38,15 @@ class IPortSMButtonsPlatform {
       white: { r: 255, g: 255, b: 255 }
     };
     
+    // Color cycle for button 10
+    this.colorCycle = ['red', 'green', 'blue', 'yellow', 'purple', 'white'];
+    this.currentColorIndex = 0;
+    
     // Store button mappings from config
     this.buttonMappings = this.config.buttonMappings || [];
+
+    // Initialize HomeKit API
+    this.homekitAPI = new homebridgeAPI();
 
     Service = this.api.hap.Service;
     Characteristic = this.api.hap.Characteristic;
@@ -208,40 +216,56 @@ class IPortSMButtonsPlatform {
 
   // Method to execute actions based on button press and current LED mode
   executeButtonAction(buttonNumber) {
+    // Special handling for button 10 - cycle through colors
+    if (buttonNumber === 10) {
+      this.cycleLEDColor();
+      return;
+    }
+    
+    // Find actions for this button
+    const actions = this.buttonMappings.filter(action => action.buttonNumber === buttonNumber);
+    
+    if (actions.length === 0) {
+      this.log(`No actions configured for button ${buttonNumber}`);
+      return;
+    }
+    
     // Determine current mode based on LED color
     const currentMode = this.getCurrentMode();
     
-    if (!currentMode) {
-      this.log(`No mode detected for current LED color: ${this.ledColor.r},${this.ledColor.g},${this.ledColor.b}`);
-      return;
+    // Find the action for the current mode
+    let actionToExecute = actions.find(action => action.modeColor === currentMode);
+    
+    if (!actionToExecute) {
+      // Look for an "any" mode fallback
+      actionToExecute = actions.find(action => action.modeColor === 'any');
+      
+      if (!actionToExecute) {
+        this.log(`No action found for button ${buttonNumber} in ${currentMode} mode`);
+        return;
+      }
     }
     
-    // Find the mapping for this button in the current mode
-    const mapping = this.buttonMappings.find(m => 
-      m.buttonNumber === buttonNumber && m.modeColor === currentMode
-    );
-    
-    if (!mapping) {
-      this.log(`No mapping found for button ${buttonNumber} in ${currentMode} mode`);
-      return;
-    }
-    
-    this.log(`Executing action for button ${buttonNumber} in ${currentMode} mode: ${JSON.stringify(mapping)}`);
+    this.log(`Executing action for button ${buttonNumber}: ${JSON.stringify(actionToExecute)}`);
     
     // Execute the action based on type
-    switch (mapping.targetType) {
-      case 'homekit':
-        this.executeHomeKitAction(mapping);
-        break;
-      case 'lifx':
-        this.executeLifxAction(mapping);
-        break;
-      case 'led':
-        this.executeLedAction(mapping);
-        break;
-      default:
-        this.log(`Unknown target type: ${mapping.targetType}`);
+    if (actionToExecute.actionType === 'scene') {
+      this.executeSceneAction(actionToExecute);
+    } else if (actionToExecute.actionType === 'led') {
+      this.executeLedAction(actionToExecute);
+    } else {
+      this.executeHomeKitAction(actionToExecute);
     }
+  }
+
+  // Special function for button 10 to cycle through colors
+  cycleLEDColor() {
+    this.currentColorIndex = (this.currentColorIndex + 1) % this.colorCycle.length;
+    const colorName = this.colorCycle[this.currentColorIndex];
+    const color = this.modeColors[colorName];
+    
+    this.log(`Button 10 pressed: Cycling to ${colorName} color`);
+    this.setLED(color.r, color.g, color.b);
   }
 
   // Determine the current mode based on LED color
@@ -257,130 +281,123 @@ class IPortSMButtonsPlatform {
       }
     }
     
-    return null;
+    return 'unknown';
+  }
+
+  // Execute HomeKit scene actions
+  async executeSceneAction(action) {
+    if (!action.targetName) {
+      this.log('No scene specified for action');
+      return;
+    }
+    
+    try {
+      // Get all scenes from HomeKit
+      const scenes = await this.homekitAPI.getScenes();
+      
+      // Find the scene by name
+      const targetScene = scenes.find(scene => scene.displayName === action.targetName);
+      
+      if (!targetScene) {
+        this.log(`Scene "${action.targetName}" not found. Available scenes: ${scenes.map(s => s.displayName).join(', ')}`);
+        return;
+      }
+      
+      // Activate the scene
+      await this.homekitAPI.activateScene(targetScene.uuid);
+      this.log(`Activated scene: ${action.targetName}`);
+      
+    } catch (error) {
+      this.log(`Error activating scene: ${error.message}`);
+    }
   }
 
   // Execute HomeKit accessory actions
-  executeHomeKitAction(mapping) {
-    if (!mapping.targetName) {
-      this.log('No target name specified for HomeKit action');
+  async executeHomeKitAction(action) {
+    if (!action.targetName) {
+      this.log('No accessory specified for action');
       return;
     }
     
-    // Find the accessory by display name
-    const accessory = this.findAccessoryByName(mapping.targetName);
-    if (!accessory) {
-      this.log(`HomeKit accessory "${mapping.targetName}" not found`);
-      return;
-    }
-    
-    // Find the appropriate service (default to Switch if not specified)
-    const serviceType = mapping.serviceType || 'Switch';
-    const service = accessory.getService(Service[serviceType]);
-    if (!service) {
-      this.log(`Service "${serviceType}" not found on accessory "${mapping.targetName}"`);
-      return;
-    }
-    
-    // Execute the action
-    switch (mapping.action) {
-      case 'toggle':
-        const currentState = service.getCharacteristic(Characteristic.On).value;
-        service.getCharacteristic(Characteristic.On).setValue(!currentState);
-        this.log(`Toggled ${mapping.targetName} to ${!currentState ? 'on' : 'off'}`);
-        break;
-      case 'on':
-        service.getCharacteristic(Characteristic.On).setValue(true);
-        this.log(`Turned on ${mapping.targetName}`);
-        break;
-      case 'off':
-        service.getCharacteristic(Characteristic.On).setValue(false);
-        this.log(`Turned off ${mapping.targetName}`);
-        break;
-      case 'brightness':
-        if (mapping.value) {
-          const brightness = parseInt(mapping.value);
-          if (!isNaN(brightness) && brightness >= 0 && brightness <= 100) {
-            service.getCharacteristic(Characteristic.Brightness).setValue(brightness);
-            this.log(`Set brightness of ${mapping.targetName} to ${brightness}%`);
+    try {
+      // Get all accessories from HomeKit
+      const accessories = await this.homekitAPI.getAccessories();
+      
+      // Find the accessory by display name
+      const targetAccessory = accessories.find(acc => acc.displayName === action.targetName);
+      
+      if (!targetAccessory) {
+        this.log(`Accessory "${action.targetName}" not found. Available accessories: ${accessories.map(a => a.displayName).join(', ')}`);
+        return;
+      }
+      
+      // Find the appropriate service (try Switch first, then Lightbulb)
+      let service = targetAccessory.getService(Service.Switch);
+      if (!service) {
+        service = targetAccessory.getService(Service.Lightbulb);
+      }
+      
+      if (!service) {
+        this.log(`No Switch or Lightbulb service found on accessory "${action.targetName}"`);
+        return;
+      }
+      
+      // Get the On characteristic
+      const onCharacteristic = service.getCharacteristic(Characteristic.On);
+      if (!onCharacteristic) {
+        this.log(`No On characteristic found on accessory "${action.targetName}"`);
+        return;
+      }
+      
+      // Execute the action
+      switch (action.action) {
+        case 'toggle':
+          const currentState = onCharacteristic.value;
+          await onCharacteristic.setValue(!currentState);
+          this.log(`Toggled ${action.targetName} to ${!currentState ? 'on' : 'off'}`);
+          break;
+        case 'on':
+          await onCharacteristic.setValue(true);
+          this.log(`Turned on ${action.targetName}`);
+          break;
+        case 'off':
+          await onCharacteristic.setValue(false);
+          this.log(`Turned off ${action.targetName}`);
+          break;
+        case 'brightness':
+          if (action.value) {
+            const brightness = parseInt(action.value);
+            if (!isNaN(brightness) && brightness >= 0 && brightness <= 100) {
+              const brightnessCharacteristic = service.getCharacteristic(Characteristic.Brightness);
+              if (brightnessCharacteristic) {
+                await brightnessCharacteristic.setValue(brightness);
+                this.log(`Set brightness of ${action.targetName} to ${brightness}%`);
+              } else {
+                this.log(`No Brightness characteristic found on accessory "${action.targetName}"`);
+              }
+            }
           }
-        }
-        break;
-      default:
-        this.log(`Unknown HomeKit action: ${mapping.action}`);
-    }
-  }
-
-  // Execute LIFX light actions
-  executeLifxAction(mapping) {
-    // This is a placeholder - you'll need to implement the actual LIFX API calls
-    this.log(`Would execute LIFX action: ${mapping.action} on ${mapping.targetName}`);
-    
-    // Example implementation would use the LIFX LAN API or HTTP API
-    // For now, we'll just log the intended action
-    switch (mapping.action) {
-      case 'toggle':
-        this.log(`Toggling LIFX light: ${mapping.targetName}`);
-        break;
-      case 'on':
-        this.log(`Turning on LIFX light: ${mapping.targetName}`);
-        break;
-      case 'off':
-        this.log(`Turning off LIFX light: ${mapping.targetName}`);
-        break;
-      case 'brightness':
-        this.log(`Setting brightness of LIFX light ${mapping.targetName} to ${mapping.value}%`);
-        break;
-      case 'color':
-        this.log(`Setting color of LIFX light ${mapping.targetName} to ${mapping.value}`);
-        break;
-      default:
-        this.log(`Unknown LIFX action: ${mapping.action}`);
+          break;
+        default:
+          this.log(`Unknown action: ${action.action}`);
+      }
+    } catch (error) {
+      this.log(`Error controlling accessory: ${error.message}`);
     }
   }
 
   // Execute LED color change actions
-  executeLedAction(mapping) {
-    if (mapping.action === 'color' && mapping.value) {
-      let r, g, b;
-      
-      if (mapping.value.startsWith('#')) {
-        // Hex color
-        const hex = mapping.value.slice(1);
-        r = parseInt(hex.substr(0, 2), 16);
-        g = parseInt(hex.substr(2, 2), 16);
-        b = parseInt(hex.substr(4, 2), 16);
+  executeLedAction(action) {
+    if (action.action === 'color' && action.ledColor) {
+      const colorName = action.ledColor.toLowerCase();
+      if (this.modeColors[colorName]) {
+        const color = this.modeColors[colorName];
+        this.setLED(color.r, color.g, color.b);
+        this.log(`Set LED to ${colorName}`);
       } else {
-        // Try to parse as named color
-        const colorName = mapping.value.toLowerCase();
-        if (this.modeColors[colorName]) {
-          r = this.modeColors[colorName].r;
-          g = this.modeColors[colorName].g;
-          b = this.modeColors[colorName].b;
-        } else {
-          this.log(`Unknown color name: ${mapping.value}`);
-          return;
-        }
-      }
-      
-      this.setLED(r, g, b);
-      this.log(`Set LED to ${mapping.value}`);
-    }
-  }
-
-  // Helper method to find an accessory by display name
-  findAccessoryByName(name) {
-    // Get all accessories registered with Homebridge
-    const accessories = this.api.accessories;
-    
-    // Find the accessory with the matching display name
-    for (const accessory of accessories) {
-      if (accessory.displayName === name) {
-        return accessory;
+        this.log(`Unknown color name: ${action.ledColor}`);
       }
     }
-    
-    return null;
   }
 
   setLED(r, g, b) {

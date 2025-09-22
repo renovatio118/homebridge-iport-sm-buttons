@@ -53,6 +53,7 @@ class IPortSMButtonsPlatform {
       // Register accessories after Homebridge is fully initialized
       this.accessories((accessories) => {
         this.log('Registering accessories after didFinishLaunching');
+        // use the same plugin identifier / platform name you register below
         this.api.registerPlatformAccessories('homebridge-iport-sm-buttons', 'IPortSMButtons', accessories);
       });
       this.processQueuedEvents();
@@ -75,7 +76,7 @@ class IPortSMButtonsPlatform {
       this.log(`Connected to ${this.ip}:${this.port}`);
       this.connected = true;
       this.queryLED();
-      if (this.accessory) this.accessory.updateReachability(true);
+      if (this.accessory && this.accessory.updateReachability) this.accessory.updateReachability(true);
       this.keepAliveInterval = setInterval(() => {
         if (this.connected && !this.isShuttingDown) this.queryLED();
       }, 5000);
@@ -113,8 +114,8 @@ class IPortSMButtonsPlatform {
               }
               this.ledColor = { r: newR, g: newG, b: newB };
               this.updateLightCharacteristics();
-            } catch (e) {
-              this.log(`LED parse error: ${e.message}`);
+            } catch (err) {
+              this.log(`LED parse error: ${err.message}`);
             }
           }
         }
@@ -123,23 +124,23 @@ class IPortSMButtonsPlatform {
 
     this.socket.on('error', (err) => {
       this.log(`Socket error: ${err.message}`);
-      this.socket.destroy();
+      try { this.socket.destroy(); } catch(e) {}
       this.connected = false;
-      if (this.accessory) this.accessory.updateReachability(false);
+      if (this.accessory && this.accessory.updateReachability) this.accessory.updateReachability(false);
       if (!this.isShuttingDown) setTimeout(() => this.connect(), this.reconnectDelay);
     });
 
     this.socket.on('close', () => {
       this.log('Connection closed');
       this.connected = false;
-      if (this.accessory) this.accessory.updateReachability(false);
+      if (this.accessory && this.accessory.updateReachability) this.accessory.updateReachability(false);
       if (this.keepAliveInterval) clearInterval(this.keepAliveInterval);
       if (!this.isShuttingDown) setTimeout(() => this.connect(), this.reconnectDelay);
     });
 
     this.socket.on('timeout', () => {
       this.log('Connection timeout');
-      this.socket.destroy();
+      try { this.socket.destroy(); } catch(e) {}
     });
   }
 
@@ -419,17 +420,10 @@ class IPortSMButtonsPlatform {
   accessories(callback) {
     this.log('Starting accessories setup');
     try {
-      // Fallback to require('hap-nodejs') if PlatformAccessory is undefined
-      let PlatformAccessory = this.api.hap.PlatformAccessory;
+      // Use API platformAccessory instead of requiring hap-nodejs.PlatformAccessory
+      const PlatformAccessory = this.api.platformAccessory;
       if (!PlatformAccessory) {
-        this.log('PlatformAccessory not found in api.hap, attempting to require hap-nodejs');
-        try {
-          const hap = require('hap-nodejs');
-          PlatformAccessory = hap.PlatformAccessory;
-          this.log(`Loaded PlatformAccessory from hap-nodejs: ${!!PlatformAccessory}`);
-        } catch (e) {
-          throw new Error(`Failed to load PlatformAccessory from hap-nodejs: ${e.message}`);
-        }
+        throw new Error('PlatformAccessory is not available from API (api.platformAccessory is undefined)');
       }
 
       if (!this.api.hap.Service || !this.api.hap.Characteristic || !this.api.hap.uuid) {
@@ -440,14 +434,20 @@ class IPortSMButtonsPlatform {
       this.log(`Generated UUID: ${uuidStr}`);
       this.accessory = new PlatformAccessory(this.config.name || 'iPort SM Buttons', uuidStr);
 
-      this.accessory.addService(this.api.hap.Service.ServiceLabel)
-        .setCharacteristic(this.api.hap.Characteristic.ServiceLabelNamespace, 1);
-      this.log('Added ServiceLabel');
+      // ServiceLabel may be optional on some HAP versions; guard it
+      if (this.api.hap.Service.ServiceLabel) {
+        this.accessory.addService(this.api.hap.Service.ServiceLabel)
+          .setCharacteristic(this.api.hap.Characteristic.ServiceLabelNamespace, 1);
+        this.log('Added ServiceLabel');
+      }
 
       this.buttonServices = [];
       for (let i = 1; i <= 10; i++) {
         const buttonService = this.accessory.addService(this.api.hap.Service.StatelessProgrammableSwitch, `Button ${i}`, `button${i}`);
-        buttonService.setCharacteristic(this.api.hap.Characteristic.ServiceLabelIndex, i);
+        // ServiceLabelIndex characteristic optional guard
+        if (this.api.hap.Characteristic.ServiceLabelIndex) {
+          buttonService.setCharacteristic(this.api.hap.Characteristic.ServiceLabelIndex, i);
+        }
         this.buttonServices[i - 1] = buttonService;
         this.log(`Added button service for Button ${i}`);
       }
@@ -470,6 +470,7 @@ class IPortSMButtonsPlatform {
           }
         });
 
+      // Brightness, Hue, Saturation as before
       this.lightService.getCharacteristic(this.api.hap.Characteristic.Brightness)
         .onGet(() => {
           if (!this.connected) throw new Error('Device not connected');
@@ -509,7 +510,7 @@ class IPortSMButtonsPlatform {
           this.setLED(r, g, b);
         });
 
-      this.accessory.updateReachability(this.connected);
+      if (this.accessory.updateReachability) this.accessory.updateReachability(this.connected);
       this.log('Accessories setup completed');
       this.processQueuedEvents();
       callback([this.accessory]);
@@ -524,7 +525,7 @@ class IPortSMButtonsPlatform {
     this.log('Configuring cached accessory');
     try {
       this.accessory = accessory;
-      this.accessory.updateReachability(this.connected);
+      if (this.accessory.updateReachability) this.accessory.updateReachability(this.connected);
       this.buttonServices = [];
       accessory.services.forEach(service => {
         if (service.subtype?.startsWith('button')) {
@@ -544,5 +545,6 @@ class IPortSMButtonsPlatform {
 
 module.exports = (api) => {
   console.log('Registering IPortSMButtons platform');
-  api.registerPlatform('IPortSMButtons', IPortSMButtonsPlatform);
+  // Correct registerPlatform signature: (pluginIdentifier, platformName, constructor)
+  api.registerPlatform('homebridge-iport-sm-buttons', 'IPortSMButtons', IPortSMButtonsPlatform);
 };

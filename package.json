@@ -3,30 +3,12 @@
   "version": "1.0.0",
   "description": "Homebridge plugin for iPort SM Buttons",
   "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [
-    "homebridge-plugin",
-    "iport",
-    "buttons",
-    "smarthome"
-  ],
   "engines": {
     "homebridge": ">=1.3.0",
     "node": ">=14.0.0"
   },
-  "dependencies": {
-    "hap-nodejs": "^0.13.1"
-  },
+  "keywords": ["homebridge-plugin","iport","buttons","smarthome"],
   "author": "renovatio118",
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/renovatio118/homebridge-iport-sm-buttons.git"
-  },
-  "bugs": {
-    "url": "https://github.com/renovatio118/homebridge-iport-sm-buttons/issues"
-  },
-  "homepage": "https://github.com/renovatio118/homebridge-iport-sm-buttons#readme"
+  "repository": { "type": "git", "url": "https://github.com/renovatio118/homebridge-iport-sm-buttons.git" }
 }

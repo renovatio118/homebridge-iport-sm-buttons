@@ -1,5 +1,4 @@
 const net = require('net');
-const { Service, Characteristic, PlatformAccessory, uuid } = require('hap-nodejs');
 
 console.log('Loading iPortSMButtons plugin');
 
@@ -37,6 +36,13 @@ class IPortSMButtonsPlatform {
 
     this.buttonMappings = this.config.buttonMappings || [];
     this.log(`Config loaded: ${JSON.stringify(this.config)}`);
+
+    if (!this.api || !this.api.hap) {
+      this.log('Error: Homebridge API or HAP is undefined');
+      return;
+    }
+
+    this.log(`HAP-NodeJS available classes: ${Object.keys(this.api.hap).join(', ')}`);
 
     this.log('IPortSMButtonsPlatform initialized');
 
@@ -184,7 +190,7 @@ class IPortSMButtonsPlatform {
       this.log(`Cannot trigger event for button ${buttonIndex + 1}: no service`);
       return;
     }
-    service.updateCharacteristic(Characteristic.ProgrammableSwitchEvent, eventType);
+    service.updateCharacteristic(this.api.hap.Characteristic.ProgrammableSwitchEvent, eventType);
     this.log(`Button ${buttonIndex + 1} triggered ${eventType === 0 ? 'single' : eventType === 1 ? 'double' : 'long'} press`);
 
     if (eventType === 0) {
@@ -278,14 +284,14 @@ class IPortSMButtonsPlatform {
       return;
     }
 
-    let service = targetAccessory.getService(Service.Switch) || targetAccessory.getService(Service.Lightbulb);
+    let service = targetAccessory.getService(this.api.hap.Service.Switch) || targetAccessory.getService(this.api.hap.Service.Lightbulb);
 
     if (!service) {
       this.log(`No Switch or Lightbulb service found on accessory "${action.targetName}"`);
       return;
     }
 
-    const onCharacteristic = service.getCharacteristic(Characteristic.On);
+    const onCharacteristic = service.getCharacteristic(this.api.hap.Characteristic.On);
     if (!onCharacteristic) {
       this.log(`No On characteristic found on accessory "${action.targetName}"`);
       return;
@@ -371,10 +377,10 @@ class IPortSMButtonsPlatform {
     }
     const hsv = this.rgbToHsv(this.ledColor.r, this.ledColor.g, this.ledColor.b);
     this.lightService
-      .updateCharacteristic(Characteristic.On, hsv.v > 0)
-      .updateCharacteristic(Characteristic.Hue, hsv.h)
-      .updateCharacteristic(Characteristic.Saturation, hsv.s)
-      .updateCharacteristic(Characteristic.Brightness, hsv.v);
+      .updateCharacteristic(this.api.hap.Characteristic.On, hsv.v > 0)
+      .updateCharacteristic(this.api.hap.Characteristic.Hue, hsv.h)
+      .updateCharacteristic(this.api.hap.Characteristic.Saturation, hsv.s)
+      .updateCharacteristic(this.api.hap.Characteristic.Brightness, hsv.v);
     this.log(`Updated light characteristics: On=${hsv.v > 0}, Hue=${hsv.h}, Sat=${hsv.s}, Bri=${hsv.v}`);
   }
 
@@ -414,27 +420,31 @@ class IPortSMButtonsPlatform {
   accessories(callback) {
     this.log('Starting accessories setup');
     try {
-      const uuidStr = uuid.generate(this.config.name || 'iPort SM Buttons');
-      this.log(`Generated UUID: ${uuidStr}`);
-      this.accessory = new PlatformAccessory(this.config.name || 'iPort SM Buttons', uuidStr);
+      if (!this.api.hap.PlatformAccessory || !this.api.hap.Service || !this.api.hap.Characteristic || !this.api.hap.uuid) {
+        throw new Error(`Required HAP classes are undefined: PlatformAccessory=${!!this.api.hap.PlatformAccessory}, Service=${!!this.api.hap.Service}, Characteristic=${!!this.api.hap.Characteristic}, uuid=${!!this.api.hap.uuid}`);
+      }
 
-      this.accessory.addService(Service.ServiceLabel)
-        .setCharacteristic(Characteristic.ServiceLabelNamespace, 1);
+      const uuidStr = this.api.hap.uuid.generate(this.config.name || 'iPort SM Buttons');
+      this.log(`Generated UUID: ${uuidStr}`);
+      this.accessory = new this.api.hap.PlatformAccessory(this.config.name || 'iPort SM Buttons', uuidStr);
+
+      this.accessory.addService(this.api.hap.Service.ServiceLabel)
+        .setCharacteristic(this.api.hap.Characteristic.ServiceLabelNamespace, 1);
       this.log('Added ServiceLabel');
 
       this.buttonServices = [];
       for (let i = 1; i <= 10; i++) {
-        const buttonService = this.accessory.addService(Service.StatelessProgrammableSwitch, `Button ${i}`, `button${i}`);
-        buttonService.setCharacteristic(Characteristic.ServiceLabelIndex, i);
+        const buttonService = this.accessory.addService(this.api.hap.Service.StatelessProgrammableSwitch, `Button ${i}`, `button${i}`);
+        buttonService.setCharacteristic(this.api.hap.Characteristic.ServiceLabelIndex, i);
         this.buttonServices[i - 1] = buttonService;
         this.log(`Added button service for Button ${i}`);
       }
 
-      this.lightService = this.accessory.addService(Service.Lightbulb, 'LED');
-      this.lightService.setCharacteristic(Characteristic.On, true);
+      this.lightService = this.accessory.addService(this.api.hap.Service.Lightbulb, 'LED');
+      this.lightService.setCharacteristic(this.api.hap.Characteristic.On, true);
       this.log('Added LED light service');
 
-      this.lightService.getCharacteristic(Characteristic.On)
+      this.lightService.getCharacteristic(this.api.hap.Characteristic.On)
         .onGet(() => {
           if (!this.connected) throw new Error('Device not connected');
           return this.rgbToHsv(this.ledColor.r, this.ledColor.g, this.ledColor.b).v > 0;
@@ -448,41 +458,41 @@ class IPortSMButtonsPlatform {
           }
         });
 
-      this.lightService.getCharacteristic(Characteristic.Brightness)
+      this.lightService.getCharacteristic(this.api.hap.Characteristic.Brightness)
         .onGet(() => {
           if (!this.connected) throw new Error('Device not connected');
           return this.rgbToHsv(this.ledColor.r, this.ledColor.g, this.ledColor.b).v;
         })
         .onSet((value) => {
           if (!this.connected) throw new Error('Device not connected');
-          const h = this.lightService.getCharacteristic(Characteristic.Hue).value;
-          const s = this.lightService.getCharacteristic(Characteristic.Saturation).value;
+          const h = this.lightService.getCharacteristic(this.api.hap.Characteristic.Hue).value;
+          const s = this.lightService.getCharacteristic(this.api.hap.Characteristic.Saturation).value;
           const { r, g, b } = this.hsvToRgb(h, s, value);
           this.setLED(r, g, b);
         });
 
-      this.lightService.getCharacteristic(Characteristic.Hue)
+      this.lightService.getCharacteristic(this.api.hap.Characteristic.Hue)
         .onGet(() => {
           if (!this.connected) throw new Error('Device not connected');
           return this.rgbToHsv(this.ledColor.r, this.ledColor.g, this.ledColor.b).h;
         })
         .onSet((value) => {
           if (!this.connected) throw new Error('Device not connected');
-          const s = this.lightService.getCharacteristic(Characteristic.Saturation).value;
-          const v = this.lightService.getCharacteristic(Characteristic.Brightness).value;
+          const s = this.lightService.getCharacteristic(this.api.hap.Characteristic.Saturation).value;
+          const v = this.lightService.getCharacteristic(this.api.hap.Characteristic.Brightness).value;
           const { r, g, b } = this.hsvToRgb(value, s, v);
           this.setLED(r, g, b);
         });
 
-      this.lightService.getCharacteristic(Characteristic.Saturation)
+      this.lightService.getCharacteristic(this.api.hap.Characteristic.Saturation)
         .onGet(() => {
           if (!this.connected) throw new Error('Device not connected');
           return this.rgbToHsv(this.ledColor.r, this.ledColor.g, this.ledColor.b).s;
         })
         .onSet((value) => {
           if (!this.connected) throw new Error('Device not connected');
-          const h = this.lightService.getCharacteristic(Characteristic.Hue).value;
-          const v = this.lightService.getCharacteristic(Characteristic.Brightness).value;
+          const h = this.lightService.getCharacteristic(this.api.hap.Characteristic.Hue).value;
+          const v = this.lightService.getCharacteristic(this.api.hap.Characteristic.Brightness).value;
           const { r, g, b } = this.hsvToRgb(h, value, v);
           this.setLED(r, g, b);
         });
@@ -493,7 +503,7 @@ class IPortSMButtonsPlatform {
       callback([this.accessory]);
     } catch (e) {
       this.log(`Error in accessories setup: ${e.message}`);
-      this.log(`HAP-NodeJS details: ${JSON.stringify(Object.keys(require('hap-nodejs')))}`);
+      this.log(`HAP-NodeJS api.hap keys: ${JSON.stringify(Object.keys(this.api.hap))}`);
       callback([]);
     }
   }

@@ -16,6 +16,9 @@
     "homebridge": ">=1.3.0",
     "node": ">=14.0.0"
   },
+  "dependencies": {
+    "hap-nodejs": "^0.13.1"
+  },
   "author": "renovatio118",
   "license": "MIT",
   "repository": {

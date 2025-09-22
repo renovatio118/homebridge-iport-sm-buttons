@@ -6,130 +6,70 @@
     "type": "object",
     "properties": {
       "name": {
-        "title": "Platform Name",
+        "title": "Name",
         "type": "string",
-        "required": true,
         "default": "iPort Buttons"
       },
       "ip": {
         "title": "Device IP Address",
         "type": "string",
-        "required": true,
-        "default": "192.168.2.12",
         "placeholder": "192.168.2.12"
       },
       "port": {
-        "title": "Device Port",
+        "title": "Port",
         "type": "integer",
-        "required": true,
         "default": 10001
       },
       "timeout": {
         "title": "Connection Timeout (ms)",
         "type": "integer",
-        "required": false,
-        "default": 10000
+        "default": 5000
       },
       "reconnectDelay": {
         "title": "Reconnect Delay (ms)",
         "type": "integer",
-        "required": false,
         "default": 5000
       },
       "buttonMappings": {
         "title": "Button Mappings",
         "type": "array",
+        "description": "Each mapping will automatically create a virtual switch in HomeKit. When the specified button is pressed and the LED color matches the modeColor, that switch will trigger. You can then use the switch in HomeKit automations to control any accessory or scene.",
         "items": {
-          "title": "Button Mapping",
           "type": "object",
           "properties": {
             "buttonNumber": {
-              "title": "Button Number",
+              "title": "Button Number (1–10)",
               "type": "integer",
-              "required": true,
               "minimum": 1,
-              "maximum": 10,
-              "default": 1
+              "maximum": 10
             },
             "modeColor": {
-              "title": "When LED Color Is",
+              "title": "LED Mode Color",
               "type": "string",
-              "required": true,
-              "default": "yellow",
-              "oneOf": [
-                { "title": "Yellow", "enum": ["yellow"] },
-                { "title": "Red", "enum": ["red"] },
-                { "title": "Blue", "enum": ["blue"] },
-                { "title": "Green", "enum": ["green"] },
-                { "title": "Purple", "enum": ["purple"] },
-                { "title": "White", "enum": ["white"] },
-                { "title": "Any Color", "enum": ["any"] }
-              ]
+              "enum": ["yellow", "red", "green", "blue", "purple", "white", "any"],
+              "default": "any"
             },
             "actionType": {
               "title": "Action Type",
               "type": "string",
-              "required": true,
-              "default": "accessory",
-              "oneOf": [
-                { "title": "Control Accessory", "enum": ["accessory"] },
-                { "title": "Trigger Scene", "enum": ["scene"] },
-                { "title": "Change LED Color", "enum": ["led"] }
-              ]
+              "enum": ["accessory", "scene", "led"],
+              "default": "accessory"
             },
             "targetName": {
-              "title": "Target Name",
-              "type": "string",
-              "required": false,
-              "placeholder": "Name of accessory or scene",
-              "description": "Enter the name of the HomeKit accessory or scene"
+              "title": "Target Accessory / Scene Name",
+              "type": "string"
             },
             "action": {
               "title": "Action",
               "type": "string",
-              "required": true,
-              "default": "toggle",
-              "oneOf": [
-                { "title": "Toggle On/Off", "enum": ["toggle"] },
-                { "title": "Turn On", "enum": ["on"] },
-                { "title": "Turn Off", "enum": ["off"] },
-                { "title": "Activate Scene", "enum": ["activate"] },
-                { "title": "Set Brightness", "enum": ["brightness"] },
-                { "title": "Set Color", "enum": ["color"] }
-              ],
-              "condition": {
-                "functionBody": "return model.actionType !== 'led';"
-              }
-            },
-            "value": {
-              "title": "Value",
-              "type": "string",
-              "required": false,
-              "placeholder": "Brightness percentage or color (e.g., 50 or #FF0000)",
-              "condition": {
-                "functionBody": "return model.action === 'brightness' || model.action === 'color';"
-              }
-            },
-            "ledColor": {
-              "title": "LED Color",
-              "type": "string",
-              "required": false,
-              "default": "yellow",
-              "oneOf": [
-                { "title": "Yellow", "enum": ["yellow"] },
-                { "title": "Red", "enum": ["red"] },
-                { "title": "Blue", "enum": ["blue"] },
-                { "title": "Green", "enum": ["green"] },
-                { "title": "Purple", "enum": ["purple"] },
-                { "title": "White", "enum": ["white"] }
-              ],
-              "condition": {
-                "functionBody": "return model.actionType === 'led';"
-              }
+              "enum": ["on", "off", "toggle"],
+              "default": "toggle"
             }
-          }
+          },
+          "required": ["buttonNumber", "modeColor", "actionType", "action"]
         }
       }
-    }
+    },
+    "required": ["ip", "buttonMappings"]
   }
 }

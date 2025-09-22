@@ -46,16 +46,15 @@ class IPortSMButtonsPlatform {
 
     this.log('IPortSMButtonsPlatform initialized');
 
-    // Force accessory registration
-    this.accessories((accessories) => {
-      this.log('Registering accessories on startup');
-      this.api.registerPlatformAccessories('homebridge-iport-sm-buttons', 'IPortSMButtons', accessories);
-    });
-
     this.connect();
 
     this.api.on('didFinishLaunching', () => {
       this.log('Homebridge finished launching');
+      // Register accessories after Homebridge is fully initialized
+      this.accessories((accessories) => {
+        this.log('Registering accessories after didFinishLaunching');
+        this.api.registerPlatformAccessories('homebridge-iport-sm-buttons', 'IPortSMButtons', accessories);
+      });
       this.processQueuedEvents();
     });
 
@@ -420,13 +419,26 @@ class IPortSMButtonsPlatform {
   accessories(callback) {
     this.log('Starting accessories setup');
     try {
-      if (!this.api.hap.PlatformAccessory || !this.api.hap.Service || !this.api.hap.Characteristic || !this.api.hap.uuid) {
-        throw new Error(`Required HAP classes are undefined: PlatformAccessory=${!!this.api.hap.PlatformAccessory}, Service=${!!this.api.hap.Service}, Characteristic=${!!this.api.hap.Characteristic}, uuid=${!!this.api.hap.uuid}`);
+      // Fallback to require('hap-nodejs') if PlatformAccessory is undefined
+      let PlatformAccessory = this.api.hap.PlatformAccessory;
+      if (!PlatformAccessory) {
+        this.log('PlatformAccessory not found in api.hap, attempting to require hap-nodejs');
+        try {
+          const hap = require('hap-nodejs');
+          PlatformAccessory = hap.PlatformAccessory;
+          this.log(`Loaded PlatformAccessory from hap-nodejs: ${!!PlatformAccessory}`);
+        } catch (e) {
+          throw new Error(`Failed to load PlatformAccessory from hap-nodejs: ${e.message}`);
+        }
+      }
+
+      if (!this.api.hap.Service || !this.api.hap.Characteristic || !this.api.hap.uuid) {
+        throw new Error(`Required HAP classes are undefined: Service=${!!this.api.hap.Service}, Characteristic=${!!this.api.hap.Characteristic}, uuid=${!!this.api.hap.uuid}`);
       }
 
       const uuidStr = this.api.hap.uuid.generate(this.config.name || 'iPort SM Buttons');
       this.log(`Generated UUID: ${uuidStr}`);
-      this.accessory = new this.api.hap.PlatformAccessory(this.config.name || 'iPort SM Buttons', uuidStr);
+      this.accessory = new PlatformAccessory(this.config.name || 'iPort SM Buttons', uuidStr);
 
       this.accessory.addService(this.api.hap.Service.ServiceLabel)
         .setCharacteristic(this.api.hap.Characteristic.ServiceLabelNamespace, 1);

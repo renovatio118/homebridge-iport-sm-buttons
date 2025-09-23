@@ -1,90 +1,75 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "iPort Buttons Config",
-  "type": "object",
-  "properties": {
-    "name": {
-      "type": "string",
-      "title": "Plugin Name"
-    },
-    "ip": {
-      "type": "string",
-      "title": "iPort IP Address"
-    },
-    "port": {
-      "type": "integer",
-      "title": "Port",
-      "default": 10001
-    },
-    "buttonMappings": {
-      "title": "Button Mappings",
-      "type": "array",
-      "items": {
-        "title": "Button Mapping",
-        "type": "object",
-        "properties": {
-          "buttonNumber": {
-            "title": "Button Number",
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 10
-          },
-          "modeColor": {
-            "title": "Mode Color",
-            "type": "string",
-            "enum": ["any", "yellow", "red", "blue", "green", "purple", "white"],
-            "default": "any"
-          },
-          "actionType": {
-            "title": "Action Type",
-            "type": "string",
-            "enum": ["accessory", "url"],
-            "default": "accessory"
-          }
-        },
-        "oneOf": [
-          {
-            "title": "Accessory Action",
-            "properties": {
-              "actionType": { "enum": ["accessory"] },
-              "targetName": {
-                "title": "Target Accessory Name",
-                "type": "string"
-              },
-              "action": {
-                "title": "Accessory Action",
-                "type": "string",
-                "enum": ["on", "off", "toggle"],
-                "default": "toggle"
-              }
+  "pluginAlias": "IPortSMButtons",
+  "pluginType": "platform",
+  "singular": true,
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Name",
+        "type": "string",
+        "default": "iPort Buttons"
+      },
+      "ip": {
+        "title": "Device IP Address",
+        "type": "string",
+        "placeholder": "192.168.2.12"
+      },
+      "port": {
+        "title": "Port",
+        "type": "integer",
+        "default": 10001
+      },
+      "timeout": {
+        "title": "Connection Timeout (ms)",
+        "type": "integer",
+        "default": 5000
+      },
+      "reconnectDelay": {
+        "title": "Reconnect Delay (ms)",
+        "type": "integer",
+        "default": 5000
+      },
+      "buttonMappings": {
+        "title": "Button Mappings",
+        "type": "array",
+        "description": "Each mapping will automatically create a virtual switch in HomeKit. When the specified button is pressed and the LED color matches the modeColor, that switch will trigger. You can then use the switch in HomeKit automations to control any accessory or scene.",
+        "items": {
+          "type": "object",
+          "properties": {
+            "buttonNumber": {
+              "title": "Button Number (1–10)",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10
             },
-            "required": ["targetName", "action"]
-          },
-          {
-            "title": "URL Action",
-            "properties": {
-              "actionType": { "enum": ["url"] },
-              "url": {
-                "title": "URL",
-                "type": "string",
-                "placeholder": "http://example.com/webhook"
-              },
-              "method": {
-                "title": "HTTP Method",
-                "type": "string",
-                "enum": ["GET", "POST"],
-                "default": "GET"
-              },
-              "body": {
-                "title": "HTTP Body (for POST)",
-                "type": "string"
-              }
+            "modeColor": {
+              "title": "LED Mode Color",
+              "type": "string",
+              "enum": ["yellow", "red", "green", "blue", "purple", "white", "any"],
+              "default": "any"
             },
-            "required": ["url", "method"]
-          }
-        ]
+            "actionType": {
+              "title": "Action Type",
+              "type": "string",
+              "enum": ["accessory", "scene", "led"],
+              "default": "accessory"
+            },
+            "targetName": {
+              "title": "Target Accessory / Scene Name",
+              "type": "string"
+            },
+            "action": {
+              "title": "Action",
+              "type": "string",
+              "enum": ["on", "off", "toggle"],
+              "default": "toggle"
+            }
+          },
+          "required": ["buttonNumber", "modeColor", "actionType", "action"]
+        }
       }
-    }
-  },
-  "required": ["name", "ip", "port", "buttonMappings"]
+    },
+    "required": ["ip", "buttonMappings"]
+  }
 }

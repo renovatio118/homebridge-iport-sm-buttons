@@ -10,5 +10,9 @@
   "keywords": ["homebridge-plugin","iport","buttons","smarthome"],
   "author": "renovatio118",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/renovatio118/homebridge-iport-sm-buttons.git" }
+  "repository": { "type": "git", "url": "https://github.com/renovatio118/homebridge-iport-sm-buttons.git" },
+  "homebridge": {
+    "pluginAlias": "iPort Buttons",
+    "pluginType": "platform"
+  }
 }

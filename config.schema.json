@@ -1,108 +1,67 @@
-{
-  "pluginAlias": "IPortSMButtons",
-  "pluginType": "platform",
-  "singular": true,
-  "headerDisplay": "iPort SM Buttons Platform",
-  "schema": {
+"buttonMappings": {
+  "title": "Button Mappings",
+  "type": "array",
+  "items": {
+    "title": "Button Mapping",
     "type": "object",
     "properties": {
-      "name": {
-        "title": "Name",
+      "buttonNumber": {
+        "title": "Button Number",
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10
+      },
+      "modeColor": {
+        "title": "Mode Color",
         "type": "string",
-        "default": "iPort Buttons"
+        "enum": ["any", "yellow", "red", "blue", "green", "purple", "white"],
+        "default": "any"
       },
-      "ip": {
-        "title": "Device IP",
+      "actionType": {
+        "title": "Action Type",
         "type": "string",
-        "placeholder": "192.168.2.12"
+        "enum": ["accessory", "url"],
+        "default": "accessory"
+      }
+    },
+    "oneOf": [
+      {
+        "title": "Accessory Action",
+        "properties": {
+          "actionType": { "enum": ["accessory"] },
+          "targetName": {
+            "title": "Target Accessory Name",
+            "type": "string"
+          },
+          "action": {
+            "title": "Accessory Action",
+            "type": "string",
+            "enum": ["on", "off", "toggle"],
+            "default": "toggle"
+          }
+        }
       },
-      "port": {
-        "title": "Port",
-        "type": "integer",
-        "default": 10001
-      },
-      "timeout": {
-        "title": "Socket Timeout (ms)",
-        "type": "integer",
-        "default": 5000
-      },
-      "reconnectDelay": {
-        "title": "Reconnect Delay (ms)",
-        "type": "integer",
-        "default": 5000
-      },
-      "triggerResetDelay": {
-        "title": "Virtual Switch Reset Delay (ms)",
-        "type": "integer",
-        "default": 500
-      },
-      "buttonMappings": {
-        "title": "Button Mappings",
-        "type": "array",
-        "items": {
-          "type": "object",
-          "properties": {
-            "buttonNumber": {
-              "title": "Button Number",
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 10
-            },
-            "modeColor": {
-              "title": "Mode Color",
-              "type": "string",
-              "enum": ["any", "yellow", "red", "blue", "green", "purple", "white"],
-              "default": "any"
-            },
-            "actionType": {
-              "title": "Action Type",
-              "type": "string",
-              "enum": ["accessory", "url"],
-              "default": "accessory"
-            },
-            "targetName": {
-              "title": "Target Accessory Name",
-              "type": "string",
-              "condition": {
-                "functionBody": "return model.actionType === 'accessory';"
-              }
-            },
-            "action": {
-              "title": "Accessory Action",
-              "type": "string",
-              "enum": ["on", "off", "toggle"],
-              "default": "toggle",
-              "condition": {
-                "functionBody": "return model.actionType === 'accessory';"
-              }
-            },
-            "url": {
-              "title": "URL",
-              "type": "string",
-              "placeholder": "http://example.com/webhook",
-              "condition": {
-                "functionBody": "return model.actionType === 'url';"
-              }
-            },
-            "method": {
-              "title": "HTTP Method",
-              "type": "string",
-              "enum": ["GET", "POST"],
-              "default": "GET",
-              "condition": {
-                "functionBody": "return model.actionType === 'url';"
-              }
-            },
-            "body": {
-              "title": "HTTP Body (for POST)",
-              "type": "string",
-              "condition": {
-                "functionBody": "return model.actionType === 'url' && model.method === 'POST';"
-              }
-            }
+      {
+        "title": "URL Action",
+        "properties": {
+          "actionType": { "enum": ["url"] },
+          "url": {
+            "title": "URL",
+            "type": "string",
+            "placeholder": "http://example.com/webhook"
+          },
+          "method": {
+            "title": "HTTP Method",
+            "type": "string",
+            "enum": ["GET", "POST"],
+            "default": "GET"
+          },
+          "body": {
+            "title": "HTTP Body (for POST)",
+            "type": "string"
           }
         }
       }
-    }
+    ]
   }
 }

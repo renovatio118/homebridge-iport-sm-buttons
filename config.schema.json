@@ -2,6 +2,7 @@
   "pluginAlias": "IPortSMButtons",
   "pluginType": "platform",
   "singular": true,
+  "headerDisplay": "iPort SM Buttons Platform",
   "schema": {
     "type": "object",
     "properties": {
@@ -12,15 +13,16 @@
       },
       "ip": {
         "title": "Device IP",
-        "type": "string"
+        "type": "string",
+        "placeholder": "192.168.2.12"
       },
       "port": {
-        "title": "Device Port",
+        "title": "Port",
         "type": "integer",
         "default": 10001
       },
       "timeout": {
-        "title": "Connection Timeout (ms)",
+        "title": "Socket Timeout (ms)",
         "type": "integer",
         "default": 5000
       },
@@ -49,7 +51,8 @@
             "modeColor": {
               "title": "Mode Color",
               "type": "string",
-              "enum": ["any", "yellow", "red", "blue", "green", "purple", "white"]
+              "enum": ["any", "yellow", "red", "blue", "green", "purple", "white"],
+              "default": "any"
             },
             "actionType": {
               "title": "Action Type",
@@ -58,18 +61,44 @@
               "default": "accessory"
             },
             "targetName": {
-              "title": "Target Accessory Name (if Action Type = accessory)",
-              "type": "string"
+              "title": "Target Accessory Name",
+              "type": "string",
+              "condition": {
+                "functionBody": "return model.actionType === 'accessory';"
+              }
             },
             "action": {
               "title": "Accessory Action",
               "type": "string",
               "enum": ["on", "off", "toggle"],
-              "default": "toggle"
+              "default": "toggle",
+              "condition": {
+                "functionBody": "return model.actionType === 'accessory';"
+              }
             },
             "url": {
-              "title": "URL to Trigger (if Action Type = url)",
-              "type": "string"
+              "title": "URL",
+              "type": "string",
+              "placeholder": "http://example.com/webhook",
+              "condition": {
+                "functionBody": "return model.actionType === 'url';"
+              }
+            },
+            "method": {
+              "title": "HTTP Method",
+              "type": "string",
+              "enum": ["GET", "POST"],
+              "default": "GET",
+              "condition": {
+                "functionBody": "return model.actionType === 'url';"
+              }
+            },
+            "body": {
+              "title": "HTTP Body (for POST)",
+              "type": "string",
+              "condition": {
+                "functionBody": "return model.actionType === 'url' && model.method === 'POST';"
+              }
             }
           }
         }

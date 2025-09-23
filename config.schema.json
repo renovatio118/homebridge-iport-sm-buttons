@@ -11,12 +11,11 @@
         "default": "iPort Buttons"
       },
       "ip": {
-        "title": "Device IP Address",
-        "type": "string",
-        "placeholder": "192.168.2.12"
+        "title": "Device IP",
+        "type": "string"
       },
       "port": {
-        "title": "Port",
+        "title": "Device Port",
         "type": "integer",
         "default": 10001
       },
@@ -30,46 +29,51 @@
         "type": "integer",
         "default": 5000
       },
+      "triggerResetDelay": {
+        "title": "Virtual Switch Reset Delay (ms)",
+        "type": "integer",
+        "default": 500
+      },
       "buttonMappings": {
         "title": "Button Mappings",
         "type": "array",
-        "description": "Each mapping will automatically create a virtual switch in HomeKit. When the specified button is pressed and the LED color matches the modeColor, that switch will trigger. You can then use the switch in HomeKit automations to control any accessory or scene.",
         "items": {
           "type": "object",
           "properties": {
             "buttonNumber": {
-              "title": "Button Number (1–10)",
+              "title": "Button Number",
               "type": "integer",
               "minimum": 1,
               "maximum": 10
             },
             "modeColor": {
-              "title": "LED Mode Color",
+              "title": "Mode Color",
               "type": "string",
-              "enum": ["yellow", "red", "green", "blue", "purple", "white", "any"],
-              "default": "any"
+              "enum": ["any", "yellow", "red", "blue", "green", "purple", "white"]
             },
             "actionType": {
               "title": "Action Type",
               "type": "string",
-              "enum": ["accessory", "scene", "led"],
+              "enum": ["accessory", "url"],
               "default": "accessory"
             },
             "targetName": {
-              "title": "Target Accessory / Scene Name",
+              "title": "Target Accessory Name (if Action Type = accessory)",
               "type": "string"
             },
             "action": {
-              "title": "Action",
+              "title": "Accessory Action",
               "type": "string",
               "enum": ["on", "off", "toggle"],
               "default": "toggle"
+            },
+            "url": {
+              "title": "URL to Trigger (if Action Type = url)",
+              "type": "string"
             }
-          },
-          "required": ["buttonNumber", "modeColor", "actionType", "action"]
+          }
         }
       }
-    },
-    "required": ["ip", "buttonMappings"]
+    }
   }
 }

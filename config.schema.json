@@ -2,6 +2,7 @@
   "pluginAlias": "IPortSMButtons",
   "pluginType": "platform",
   "singular": true,
+  "headerDisplay": "iPort SM Buttons Platform",
   "schema": {
     "type": "object",
     "properties": {
@@ -11,7 +12,7 @@
         "default": "iPort Buttons"
       },
       "ip": {
-        "title": "Device IP Address",
+        "title": "Device IP",
         "type": "string",
         "placeholder": "192.168.2.12"
       },
@@ -21,7 +22,7 @@
         "default": 10001
       },
       "timeout": {
-        "title": "Connection Timeout (ms)",
+        "title": "Socket Timeout (ms)",
         "type": "integer",
         "default": 5000
       },
@@ -31,27 +32,26 @@
         "default": 5000
       },
       "triggerResetDelay": {
-        "title": "Trigger Reset Delay (ms)",
+        "title": "Virtual Switch Reset Delay (ms)",
         "type": "integer",
         "default": 500
       },
       "buttonMappings": {
         "title": "Button Mappings",
         "type": "array",
-        "description": "Each mapping creates a virtual switch in HomeKit. When the button is pressed and the LED color matches the modeColor, the switch will trigger. You can use these switches in HomeKit automations.",
         "items": {
           "type": "object",
           "properties": {
             "buttonNumber": {
-              "title": "Button Number (1–10)",
+              "title": "Button Number",
               "type": "integer",
               "minimum": 1,
               "maximum": 10
             },
             "modeColor": {
-              "title": "LED Mode Color",
+              "title": "Mode Color",
               "type": "string",
-              "enum": ["yellow", "red", "green", "blue", "purple", "white", "any"],
+              "enum": ["any", "yellow", "red", "blue", "green", "purple", "white"],
               "default": "any"
             },
             "actionType": {
@@ -61,7 +61,7 @@
               "default": "accessory"
             },
             "targetName": {
-              "title": "Target Accessory Name",
+              "title": "Target Accessory Name (for accessory action)",
               "type": "string"
             },
             "action": {
@@ -71,9 +71,9 @@
               "default": "toggle"
             },
             "url": {
-              "title": "URL (for URL actions)",
+              "title": "URL (for url action)",
               "type": "string",
-              "placeholder": "http://192.168.2.50/api"
+              "placeholder": "http://example.com/webhook"
             },
             "method": {
               "title": "HTTP Method",
@@ -82,14 +82,12 @@
               "default": "GET"
             },
             "body": {
-              "title": "POST Body",
+              "title": "HTTP Body (for POST)",
               "type": "string"
             }
-          },
-          "required": ["buttonNumber", "modeColor", "actionType"]
+          }
         }
       }
-    },
-    "required": ["ip", "buttonMappings"]
+    }
   }
 }

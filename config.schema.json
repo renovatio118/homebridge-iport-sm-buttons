@@ -30,10 +30,15 @@
         "type": "integer",
         "default": 5000
       },
+      "triggerResetDelay": {
+        "title": "Trigger Reset Delay (ms)",
+        "type": "integer",
+        "default": 500
+      },
       "buttonMappings": {
         "title": "Button Mappings",
         "type": "array",
-        "description": "Each mapping will automatically create a virtual switch in HomeKit. When the specified button is pressed and the LED color matches the modeColor, that switch will trigger. You can then use the switch in HomeKit automations to control any accessory or scene.",
+        "description": "Each mapping creates a virtual switch in HomeKit. When the button is pressed and the LED color matches the modeColor, the switch will trigger. You can use these switches in HomeKit automations.",
         "items": {
           "type": "object",
           "properties": {
@@ -52,21 +57,36 @@
             "actionType": {
               "title": "Action Type",
               "type": "string",
-              "enum": ["accessory", "scene", "led"],
+              "enum": ["accessory", "url"],
               "default": "accessory"
             },
             "targetName": {
-              "title": "Target Accessory / Scene Name",
+              "title": "Target Accessory Name",
               "type": "string"
             },
             "action": {
-              "title": "Action",
+              "title": "Accessory Action",
               "type": "string",
               "enum": ["on", "off", "toggle"],
               "default": "toggle"
+            },
+            "url": {
+              "title": "URL (for URL actions)",
+              "type": "string",
+              "placeholder": "http://192.168.2.50/api"
+            },
+            "method": {
+              "title": "HTTP Method",
+              "type": "string",
+              "enum": ["GET", "POST"],
+              "default": "GET"
+            },
+            "body": {
+              "title": "POST Body",
+              "type": "string"
             }
           },
-          "required": ["buttonNumber", "modeColor", "actionType", "action"]
+          "required": ["buttonNumber", "modeColor", "actionType"]
         }
       }
     },

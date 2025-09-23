@@ -1,4 +1,6 @@
 const net = require('net');
+const http = require('http');
+const https = require('https');
 
 console.log('Loading iPortSMButtons plugin');
 
@@ -13,11 +15,11 @@ class IPortSMButtonsPlatform {
     this.port = this.config.port || 10001;
     this.timeout = this.config.timeout || 5000;
     this.reconnectDelay = this.config.reconnectDelay || 5000;
-    this.triggerResetDelay = typeof this.config.triggerResetDelay === 'number' ? this.config.triggerResetDelay : 500; // ms
+    this.triggerResetDelay = typeof this.config.triggerResetDelay === 'number' ? this.config.triggerResetDelay : 500;
 
     // runtime state
     this.buttonServices = [];
-    this.mappingSwitches = {}; // mappingKey -> Switch service
+    this.mappingSwitches = {};
     this.buttonStates = Array.from({ length: 10 }, () => ({ state: 0, lastPress: 0 }));
     this.ledColor = { r: 255, g: 255, b: 255 };
     this.connected = false;
@@ -33,7 +35,7 @@ class IPortSMButtonsPlatform {
       red: { r: 255, g: 0, b: 0 },
       blue: { r: 0, g: 0, b: 255 },
       green: { r: 0, g: 255, b: 0 },
-      purple: { r: 128, g: 0, b: 128 },
+      purple: { r: 255, g: 0, b: 255 }, // fixed to full brightness
       white: { r: 255, g: 255, b: 255 }
     };
 
@@ -88,13 +90,8 @@ class IPortSMButtonsPlatform {
     this.socket.connect(this.port, this.ip, () => {
       this.log(`Connected to ${this.ip}:${this.port}`);
       this.connected = true;
-
-      // initial LED query (we keep it, but queryLED writes silently)
       this.queryLED();
-
       if (this.accessory && this.accessory.updateReachability) this.accessory.updateReachability(true);
-
-      // keep polling LED state (no verbose logging)
       this.keepAliveInterval = setInterval(() => {
         if (this.connected && !this.isShuttingDown) this.queryLED();
       }, 5000);
@@ -103,15 +100,11 @@ class IPortSMButtonsPlatform {
     this.socket.on('data', (data) => {
       if (this.isShuttingDown) return;
       const str = data.toString().trim();
-      this.lastRawData = str; // keep latest raw in memory for diagnostics if needed
+      this.lastRawData = str;
 
-      // try JSON first (some iPort replies are JSON)
       try {
         const json = JSON.parse(str);
-        if (json.led) {
-          // some devices include led in JSON
-          this.parseAndSetLedFromString(String(json.led));
-        }
+        if (json.led) this.parseAndSetLedFromString(String(json.led));
         if (json.events) {
           json.events.forEach((event) => {
             const keyNum = parseInt(event.label.split(' ')[1], 10) - 1;
@@ -120,14 +113,12 @@ class IPortSMButtonsPlatform {
           });
         }
       } catch (e) {
-        // not JSON; handle 'led=' and raw RGB strings like "255255000"
         if (str.includes('led=')) {
           const ledValue = str.split('led=')[1]?.trim();
           if (ledValue) this.parseAndSetLedFromString(ledValue);
         } else {
           const possibleRGB = str.replace(/\r|\n/g, '').trim();
           if (/^\d{9}$/.test(possibleRGB)) this.parseAndSetLedFromString(possibleRGB);
-          // otherwise ignore (or keep as lastRawData for debugging)
         }
       }
     });
@@ -149,12 +140,10 @@ class IPortSMButtonsPlatform {
     });
 
     this.socket.on('timeout', () => {
-      // suppress timeout log noise
       try { this.socket.destroy(); } catch (e) {}
     });
   }
 
-  // parse 9-digit rgb string safely and set ledColor (silent updates)
   parseAndSetLedFromString(ledValue) {
     try {
       const s = String(ledValue).trim();
@@ -163,29 +152,22 @@ class IPortSMButtonsPlatform {
       const newG = parseInt(padded.substr(3, 3), 10);
       const newB = parseInt(padded.substr(6, 3), 10);
       this.ledColor = { r: newR, g: newG, b: newB };
-      // update HomeKit characteristics silently (no repetitive logging)
       this.updateLightCharacteristics();
-    } catch (err) {
-      // ignore parse errors
-    }
+    } catch (err) {}
   }
 
   // -------------------------
   // Event queue / button handling
   // -------------------------
   queueOrHandleEvent(buttonIndex, state) {
-    // minimal logging — useful to know events are queued/handled
-    this.log(`Queue or handle event: button ${buttonIndex + 1}, state ${state}, services ${this.buttonServices.length}`);
     if (this.buttonServices.length === 0) {
       this.eventQueue.push({ buttonIndex, state });
-      this.log(`Queued event for button ${buttonIndex + 1}, state ${state}`);
     } else {
       this.handleButtonEvent(buttonIndex, state);
     }
   }
 
   processQueuedEvents() {
-    this.log(`Processing ${this.eventQueue.length} queued events`);
     while (this.eventQueue.length > 0) {
       const event = this.eventQueue.shift();
       this.handleButtonEvent(event.buttonIndex, event.state);
@@ -193,15 +175,9 @@ class IPortSMButtonsPlatform {
   }
 
   handleButtonEvent(buttonIndex, state) {
-    if (!this.connected || this.isShuttingDown) {
-      this.log(`Cannot handle event for button ${buttonIndex + 1}: not connected or shutting down`);
-      return;
-    }
+    if (!this.connected || this.isShuttingDown) return;
     const service = this.buttonServices[buttonIndex];
-    if (!service) {
-      this.log(`No service found for button ${buttonIndex + 1}`);
-      return;
-    }
+    if (!service) return;
     const bs = this.buttonStates[buttonIndex];
 
     if (state === 1) {
@@ -219,15 +195,9 @@ class IPortSMButtonsPlatform {
     if (service) {
       try {
         service.updateCharacteristic(this.api.hap.Characteristic.ProgrammableSwitchEvent, eventType);
-      } catch (e) {
-        // ignore update errors
-      }
+      } catch (e) {}
     }
-    const humanType = eventType === 0 ? 'single' : eventType === 1 ? 'double' : 'long';
-    this.log(`Button ${buttonIndex + 1} triggered ${humanType} press`);
-    if (eventType === 0) {
-      this.executeButtonAction(buttonIndex + 1);
-    }
+    if (eventType === 0) this.executeButtonAction(buttonIndex + 1);
   }
 
   // -------------------------
@@ -240,39 +210,22 @@ class IPortSMButtonsPlatform {
     }
 
     const actions = this.buttonMappings.filter(action => action.buttonNumber === buttonNumber);
-    if (actions.length === 0) {
-      this.log(`No actions configured for button ${buttonNumber}`);
-      return;
-    }
+    if (actions.length === 0) return;
 
     const currentMode = this.getCurrentMode();
-    this.log(`Current LED mode: ${currentMode}`);
-
     let actionToExecute = actions.find(a => a.modeColor === currentMode);
+    if (!actionToExecute) actionToExecute = actions.find(a => a.modeColor === 'any');
+    if (!actionToExecute) return;
 
-    if (!actionToExecute) {
-      actionToExecute = actions.find(a => a.modeColor === 'any');
-      if (!actionToExecute) {
-        this.log(`No action found for button ${buttonNumber} in ${currentMode} mode`);
-        return;
-      }
-    }
-
-    this.log(`Executing action for button ${buttonNumber}: ${JSON.stringify(actionToExecute)}`);
-
-    // trigger the virtual mapping switch if present (preferred flow)
     const mappingKey = this.getMappingKey(actionToExecute);
     const vSwitch = this.mappingSwitches[mappingKey];
     if (vSwitch) {
       this.triggerVirtualSwitch(vSwitch, mappingKey, actionToExecute);
-      return; // do not execute direct control when mapping switch exists
+      return;
     }
 
-    // fallback legacy behavior (best-effort direct control)
-    if (actionToExecute.actionType === 'scene') {
-      this.log(`Scene action requested: ${actionToExecute.targetName}`);
-    } else if (actionToExecute.actionType === 'led') {
-      this.executeLedAction(actionToExecute);
+    if (actionToExecute.actionType === 'url') {
+      this.executeUrlAction(actionToExecute);
     } else {
       this.executeHomeKitAction(actionToExecute);
     }
@@ -281,21 +234,45 @@ class IPortSMButtonsPlatform {
   triggerVirtualSwitch(service, mappingKey, mapping) {
     try {
       service.updateCharacteristic(this.api.hap.Characteristic.On, true);
-      this.log(`Triggered virtual switch for mapping ${mappingKey} -> ${mapping.targetName || ''} : ${mapping.action}`);
       setTimeout(() => {
-        try {
-          service.updateCharacteristic(this.api.hap.Characteristic.On, false);
-        } catch (e) {
-          // ignore
-        }
+        try { service.updateCharacteristic(this.api.hap.Characteristic.On, false); } catch (e) {}
       }, this.triggerResetDelay);
-    } catch (e) {
-      this.log(`Error triggering virtual switch ${mappingKey}: ${e.message}`);
-    }
+    } catch (e) {}
   }
 
   getMappingKey(mapping) {
     return `btn${mapping.buttonNumber}-${mapping.modeColor}-${mapping.action}-${(mapping.targetName || '').replace(/\s+/g, '_')}`;
+  }
+
+  executeUrlAction(action) {
+    if (!action.url) {
+      this.log('No URL specified for url action');
+      return;
+    }
+    try {
+      const lib = action.url.startsWith('https') ? https : http;
+      const method = (action.method || 'GET').toUpperCase();
+      const options = new URL(action.url);
+      options.method = method;
+
+      const req = lib.request(options, (res) => {
+        res.on('data', () => {});
+      });
+
+      req.on('error', (err) => this.log(`URL action error: ${err.message}`));
+
+      if (method === 'POST' && action.body) {
+        try {
+          req.write(action.body);
+        } catch (e) {
+          this.log(`Error writing POST body: ${e.message}`);
+        }
+      }
+      req.end();
+      this.log(`Triggered URL: ${action.url} [${method}]`);
+    } catch (err) {
+      this.log(`Error executing URL action: ${err.message}`);
+    }
   }
 
   // -------------------------
@@ -305,7 +282,6 @@ class IPortSMButtonsPlatform {
     this.currentColorIndex = (this.currentColorIndex + 1) % this.colorCycle.length;
     const colorName = this.colorCycle[this.currentColorIndex];
     const color = this.modeColors[colorName];
-    this.log(`Button 10 pressed: Cycling to ${colorName} color (${color.r},${color.g},${color.b})`);
     this.setLED(color.r, color.g, color.b);
   }
 
@@ -318,82 +294,44 @@ class IPortSMButtonsPlatform {
     b = Math.round((b / max) * 255);
 
     for (const mode in this.modeColors) {
-      const modeColor = this.modeColors[mode];
-      if (r === modeColor.r && g === modeColor.g && b === modeColor.b) return mode;
+      const mc = this.modeColors[mode];
+      if (r === mc.r && g === mc.g && b === mc.b) return mode;
     }
     return 'unknown';
-  }
-
-  executeLedAction(action) {
-    if (action.ledColor) {
-      const colorName = action.ledColor.toLowerCase();
-      if (this.modeColors[colorName]) {
-        const color = this.modeColors[colorName];
-        this.setLED(color.r, color.g, color.b);
-        this.log(`Set LED to ${colorName}`);
-      } else {
-        this.log(`Unknown color name: ${action.ledColor}`);
-      }
-    }
   }
 
   // -------------------------
   // HomeKit control helpers
   // -------------------------
   executeHomeKitAction(action) {
-    if (!action.targetName) {
-      this.log('No accessory specified for action');
-      return;
-    }
-
+    if (!action.targetName) return;
     const targetAccessory = this.findAccessoryByName(action.targetName);
-
-    if (!targetAccessory) {
-      this.log(`Accessory "${action.targetName}" not found in Homebridge`);
-      return;
-    }
+    if (!targetAccessory) return;
 
     let service = targetAccessory.getService(this.api.hap.Service.Switch) || targetAccessory.getService(this.api.hap.Service.Lightbulb);
-
-    if (!service) {
-      this.log(`No Switch or Lightbulb service found on accessory "${action.targetName}"`);
-      return;
-    }
-
+    if (!service) return;
     const onCharacteristic = service.getCharacteristic(this.api.hap.Characteristic.On);
-    if (!onCharacteristic) {
-      this.log(`No On characteristic found on accessory "${action.targetName}"`);
-      return;
-    }
+    if (!onCharacteristic) return;
 
     switch (action.action) {
       case 'toggle': {
         const currentState = onCharacteristic.value;
         try { onCharacteristic.setValue(!currentState); } catch (e) {}
-        this.log(`Toggled ${action.targetName} to ${!currentState ? 'on' : 'off'}`);
         break;
       }
       case 'on':
         try { onCharacteristic.setValue(true); } catch (e) {}
-        this.log(`Turned on ${action.targetName}`);
         break;
       case 'off':
         try { onCharacteristic.setValue(false); } catch (e) {}
-        this.log(`Turned off ${action.targetName}`);
         break;
-      default:
-        this.log(`Unknown action: ${action.action}`);
     }
   }
 
   findAccessoryByName(name) {
     try {
-      // homebridge internals expose accessories in different places on different versions
       const hbServer = this.api._homebridge || this.api.server;
-      if (!hbServer || !hbServer.accessories || !hbServer.accessories.accessories) {
-        // cannot access internal accessory list
-        return null;
-      }
+      if (!hbServer || !hbServer.accessories || !hbServer.accessories.accessories) return null;
       const accessoriesMap = hbServer.accessories.accessories;
       for (const acc of accessoriesMap.values()) {
         if (acc.displayName === name) return acc;
@@ -413,21 +351,16 @@ class IPortSMButtonsPlatform {
     try {
       this.socket.write(cmd);
       this.ledColor = { r, g, b };
-    } catch (e) {
-      // ignore write errors
-    }
+    } catch (e) {}
   }
 
   queryLED() {
     if (!this.connected || this.isShuttingDown) return;
     try {
-      this.socket.write('\rled=?\r'); // silent query
-    } catch (e) {
-      // ignore
-    }
+      this.socket.write('\rled=?\r');
+    } catch (e) {}
   }
 
-  // update HomeKit light characteristics silently
   updateLightCharacteristics() {
     if (!this.lightService || !this.connected || this.isShuttingDown) return;
     const hsv = this.rgbToHsv(this.ledColor.r, this.ledColor.g, this.ledColor.b);
@@ -437,9 +370,7 @@ class IPortSMButtonsPlatform {
         .updateCharacteristic(this.api.hap.Characteristic.Hue, hsv.h)
         .updateCharacteristic(this.api.hap.Characteristic.Saturation, hsv.s)
         .updateCharacteristic(this.api.hap.Characteristic.Brightness, hsv.v);
-    } catch (e) {
-      // ignore characteristic update errors
-    }
+    } catch (e) {}
   }
 
   // -------------------------
@@ -482,27 +413,16 @@ class IPortSMButtonsPlatform {
   // Accessories creation
   // -------------------------
   accessories(callback) {
-    this.log('Starting accessories setup');
     try {
       const PlatformAccessory = this.api.platformAccessory;
-      if (!PlatformAccessory) {
-        throw new Error('PlatformAccessory is not available from API (api.platformAccessory is undefined)');
-      }
-
-      if (!this.api.hap.Service || !this.api.hap.Characteristic || !this.api.hap.uuid) {
-        throw new Error(`Required HAP classes are undefined`);
-      }
-
       const uuidStr = this.api.hap.uuid.generate(this.config.name || 'iPort SM Buttons');
       this.accessory = new PlatformAccessory(this.config.name || 'iPort SM Buttons', uuidStr);
 
-      // ServiceLabel (optional)
       if (this.api.hap.Service.ServiceLabel) {
         this.accessory.addService(this.api.hap.Service.ServiceLabel)
           .setCharacteristic(this.api.hap.Characteristic.ServiceLabelNamespace, 1);
       }
 
-      // --- 10 physical stateless button services ---
       this.buttonServices = [];
       for (let i = 1; i <= 10; i++) {
         const buttonService = this.accessory.addService(this.api.hap.Service.StatelessProgrammableSwitch, `Button ${i}`, `button${i}`);
@@ -510,76 +430,17 @@ class IPortSMButtonsPlatform {
           buttonService.setCharacteristic(this.api.hap.Characteristic.ServiceLabelIndex, i);
         }
         this.buttonServices[i - 1] = buttonService;
-        this.log(`Added button service for Button ${i}`);
       }
 
-      // --- LED Light service ---
       this.lightService = this.accessory.addService(this.api.hap.Service.Lightbulb, 'LED');
       this.lightService.setCharacteristic(this.api.hap.Characteristic.On, true);
-      this.log('Added LED light service');
 
-      // On / Brightness / Hue / Saturation handlers (kept as before)
-      this.lightService.getCharacteristic(this.api.hap.Characteristic.On)
-        .onGet(() => {
-          if (!this.connected) throw new Error('Device not connected');
-          return this.rgbToHsv(this.ledColor.r, this.ledColor.g, this.ledColor.b).v > 0;
-        })
-        .onSet((value) => {
-          if (!this.connected) throw new Error('Device not connected');
-          if (value && this.ledColor.r === 0 && this.ledColor.g === 0 && this.ledColor.b === 0) {
-            this.setLED(255, 255, 255);
-          } else if (!value) {
-            this.setLED(0, 0, 0);
-          }
-        });
-
-      this.lightService.getCharacteristic(this.api.hap.Characteristic.Brightness)
-        .onGet(() => {
-          if (!this.connected) throw new Error('Device not connected');
-          return this.rgbToHsv(this.ledColor.r, this.ledColor.g, this.ledColor.b).v;
-        })
-        .onSet((value) => {
-          if (!this.connected) throw new Error('Device not connected');
-          const h = this.lightService.getCharacteristic(this.api.hap.Characteristic.Hue).value;
-          const s = this.lightService.getCharacteristic(this.api.hap.Characteristic.Saturation).value;
-          const { r, g, b } = this.hsvToRgb(h, s, value);
-          this.setLED(r, g, b);
-        });
-
-      this.lightService.getCharacteristic(this.api.hap.Characteristic.Hue)
-        .onGet(() => {
-          if (!this.connected) throw new Error('Device not connected');
-          return this.rgbToHsv(this.ledColor.r, this.ledColor.g, this.ledColor.b).h;
-        })
-        .onSet((value) => {
-          if (!this.connected) throw new Error('Device not connected');
-          const s = this.lightService.getCharacteristic(this.api.hap.Characteristic.Saturation).value;
-          const v = this.lightService.getCharacteristic(this.api.hap.Characteristic.Brightness).value;
-          const { r, g, b } = this.hsvToRgb(value, s, v);
-          this.setLED(r, g, b);
-        });
-
-      this.lightService.getCharacteristic(this.api.hap.Characteristic.Saturation)
-        .onGet(() => {
-          if (!this.connected) throw new Error('Device not connected');
-          return this.rgbToHsv(this.ledColor.r, this.ledColor.g, this.ledColor.b).s;
-        })
-        .onSet((value) => {
-          if (!this.connected) throw new Error('Device not connected');
-          const h = this.lightService.getCharacteristic(this.api.hap.Characteristic.Hue).value;
-          const v = this.lightService.getCharacteristic(this.api.hap.Characteristic.Brightness).value;
-          const { r, g, b } = this.hsvToRgb(h, value, v);
-          this.setLED(r, g, b);
-        });
-
-      // --- Virtual mapping Switches (one per mapping) ---
       this.mappingSwitches = {};
       this.buttonMappings.forEach((mapping) => {
         const key = this.getMappingKey(mapping);
-        const svcName = `B${mapping.buttonNumber} [${mapping.modeColor}] → ${mapping.action} ${mapping.targetName || ''}`;
+        const svcName = `B${mapping.buttonNumber} [${mapping.modeColor}] → ${mapping.actionType}`;
         const vSwitch = this.accessory.addService(this.api.hap.Service.Switch, svcName, key);
-
-        // Auto-reset if user toggles in UI
+        vSwitch.setCharacteristic(this.api.hap.Characteristic.Name, svcName);
         vSwitch.getCharacteristic(this.api.hap.Characteristic.On).onSet((value) => {
           if (value) {
             setTimeout(() => {
@@ -587,15 +448,10 @@ class IPortSMButtonsPlatform {
             }, this.triggerResetDelay);
           }
         });
-
-        // store by subtype (mapping key)
         this.mappingSwitches[key] = vSwitch;
-        this.log(`Added mapping switch: ${svcName}`);
       });
 
       if (this.accessory.updateReachability) this.accessory.updateReachability(this.connected);
-      this.log('Accessories setup completed');
-      this.processQueuedEvents();
       callback([this.accessory]);
     } catch (e) {
       this.log(`Error in accessories setup: ${e.message}`);
@@ -603,40 +459,29 @@ class IPortSMButtonsPlatform {
     }
   }
 
-  // restore cached accessory on startup
   configureAccessory(accessory) {
-    this.log('Configuring cached accessory');
-    try {
-      this.accessory = accessory;
-      if (this.accessory.updateReachability) this.accessory.updateReachability(this.connected);
+    this.accessory = accessory;
+    if (this.accessory.updateReachability) this.accessory.updateReachability(this.connected);
+    this.buttonServices = [];
+    this.mappingSwitches = {};
 
-      this.buttonServices = [];
-      this.mappingSwitches = {};
-
-      accessory.services.forEach(service => {
-        // physical buttons subtypes should be 'buttonX'
-        if (service.subtype?.startsWith('button')) {
-          const index = parseInt(service.subtype.replace('button', '')) - 1;
-          this.buttonServices[index] = service;
-        } else if (service.displayName === 'LED' && service.UUID === this.api.hap.Service.Lightbulb.UUID) {
-          this.lightService = service;
-        } else if (service.UUID === this.api.hap.Service.Switch.UUID && service.subtype) {
-          // mapping virtual switches use subtype = mappingKey
+    accessory.services.forEach(service => {
+      if (service.subtype?.startsWith('button')) {
+        const index = parseInt(service.subtype.replace('button', '')) - 1;
+        this.buttonServices[index] = service;
+      } else if (service.displayName === 'LED' && service.UUID === this.api.hap.Service.Lightbulb.UUID) {
+        this.lightService = service;
+      } else if (service.UUID === this.api.hap.Service.Switch.UUID) {
+        if (service.subtype) {
           this.mappingSwitches[service.subtype] = service;
-          // ensure they are off initially
           try { service.updateCharacteristic(this.api.hap.Characteristic.On, false); } catch (e) {}
         }
-      });
-
-      this.log(`Restored ${this.buttonServices.length} button services and ${Object.keys(this.mappingSwitches).length} mapping switches`);
-      this.processQueuedEvents();
-    } catch (e) {
-      this.log(`Error in configureAccessory: ${e.message}`);
-    }
+      }
+    });
+    this.processQueuedEvents();
   }
 }
 
-// register platform
 module.exports = (api) => {
   console.log('Registering IPortSMButtons platform');
   api.registerPlatform('homebridge-iport-sm-buttons', 'IPortSMButtons', IPortSMButtonsPlatform);

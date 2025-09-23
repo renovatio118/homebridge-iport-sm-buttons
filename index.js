@@ -483,6 +483,11 @@ class IPortSMButtonsPlatform {
 }
 
 module.exports = (api) => {
+  if (!api || !api.registerPlatform) {
+    console.error('Homebridge API is missing or invalid');
+    return;
+  }
   console.log('Registering IPortSMButtons platform');
-  api.registerPlatform('homebridge-iport-sm-buttons', 'IPortSMButtons', IPortSMButtonsPlatform);
+  api.registerPlatform('homebridge-iport-sm-buttons', 'iPort Buttons', IPortSMButtonsPlatform, true);
 };
+

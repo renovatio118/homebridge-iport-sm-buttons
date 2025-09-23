@@ -15,11 +15,11 @@ class IPortSMButtonsPlatform {
     this.port = this.config.port || 10001;
     this.timeout = this.config.timeout || 5000;
     this.reconnectDelay = this.config.reconnectDelay || 5000;
-    this.triggerResetDelay = typeof this.config.triggerResetDelay === 'number' ? this.config.triggerResetDelay : 500; // ms
+    this.triggerResetDelay = typeof this.config.triggerResetDelay === 'number' ? this.config.triggerResetDelay : 500;
 
     // runtime state
     this.buttonServices = [];
-    this.mappingSwitches = {}; // mappingKey -> Switch service
+    this.mappingSwitches = {};
     this.buttonStates = Array.from({ length: 10 }, () => ({ state: 0, lastPress: 0 }));
     this.ledColor = { r: 255, g: 255, b: 255 };
     this.connected = false;
@@ -29,13 +29,13 @@ class IPortSMButtonsPlatform {
     this.eventQueue = [];
     this.lastRawData = null;
 
-    // color mapping (purple fixed to 255,0,255 for brightness = 100%)
+    // color mapping
     this.modeColors = {
       yellow: { r: 255, g: 255, b: 0 },
       red: { r: 255, g: 0, b: 0 },
       blue: { r: 0, g: 0, b: 255 },
       green: { r: 0, g: 255, b: 0 },
-      purple: { r: 255, g: 0, b: 255 },
+      purple: { r: 255, g: 0, b: 255 }, // fixed to full brightness
       white: { r: 255, g: 255, b: 255 }
     };
 
@@ -90,13 +90,8 @@ class IPortSMButtonsPlatform {
     this.socket.connect(this.port, this.ip, () => {
       this.log(`Connected to ${this.ip}:${this.port}`);
       this.connected = true;
-
-      // initial LED query (we keep it, but queryLED writes silently)
       this.queryLED();
-
       if (this.accessory && this.accessory.updateReachability) this.accessory.updateReachability(true);
-
-      // keep polling LED state (no verbose logging)
       this.keepAliveInterval = setInterval(() => {
         if (this.connected && !this.isShuttingDown) this.queryLED();
       }, 5000);
@@ -165,7 +160,6 @@ class IPortSMButtonsPlatform {
   // Event queue / button handling
   // -------------------------
   queueOrHandleEvent(buttonIndex, state) {
-    this.log(`Queue or handle event: button ${buttonIndex + 1}, state ${state}, services ${this.buttonServices.length}`);
     if (this.buttonServices.length === 0) {
       this.eventQueue.push({ buttonIndex, state });
     } else {
@@ -203,9 +197,7 @@ class IPortSMButtonsPlatform {
         service.updateCharacteristic(this.api.hap.Characteristic.ProgrammableSwitchEvent, eventType);
       } catch (e) {}
     }
-    if (eventType === 0) {
-      this.executeButtonAction(buttonIndex + 1);
-    }
+    if (eventType === 0) this.executeButtonAction(buttonIndex + 1);
   }
 
   // -------------------------
@@ -222,10 +214,8 @@ class IPortSMButtonsPlatform {
 
     const currentMode = this.getCurrentMode();
     let actionToExecute = actions.find(a => a.modeColor === currentMode);
-    if (!actionToExecute) {
-      actionToExecute = actions.find(a => a.modeColor === 'any');
-      if (!actionToExecute) return;
-    }
+    if (!actionToExecute) actionToExecute = actions.find(a => a.modeColor === 'any');
+    if (!actionToExecute) return;
 
     const mappingKey = this.getMappingKey(actionToExecute);
     const vSwitch = this.mappingSwitches[mappingKey];
@@ -236,7 +226,7 @@ class IPortSMButtonsPlatform {
 
     if (actionToExecute.actionType === 'url') {
       this.executeUrlAction(actionToExecute);
-    } else if (actionToExecute.actionType === 'accessory') {
+    } else {
       this.executeHomeKitAction(actionToExecute);
     }
   }
@@ -250,29 +240,39 @@ class IPortSMButtonsPlatform {
     } catch (e) {}
   }
 
+  getMappingKey(mapping) {
+    return `btn${mapping.buttonNumber}-${mapping.modeColor}-${mapping.action}-${(mapping.targetName || '').replace(/\s+/g, '_')}`;
+  }
+
   executeUrlAction(action) {
     if (!action.url) {
-      this.log('URL action missing "url" field');
+      this.log('No URL specified for url action');
       return;
     }
     try {
-      const urlObj = new URL(action.url);
-      const client = urlObj.protocol === 'https:' ? https : http;
-      const req = client.request(urlObj, { method: 'GET' }, (res) => {
-        res.resume();
-      });
-      req.on('error', (err) => {
-        this.log(`URL request failed: ${err.message}`);
-      });
-      req.end();
-      this.log(`Triggered URL: ${action.url}`);
-    } catch (e) {
-      this.log(`Invalid URL action: ${e.message}`);
-    }
-  }
+      const lib = action.url.startsWith('https') ? https : http;
+      const method = (action.method || 'GET').toUpperCase();
+      const options = new URL(action.url);
+      options.method = method;
 
-  getMappingKey(mapping) {
-    return `btn${mapping.buttonNumber}-${mapping.modeColor}-${mapping.actionType}-${(mapping.targetName || mapping.url || '').replace(/\s+/g, '_')}`;
+      const req = lib.request(options, (res) => {
+        res.on('data', () => {});
+      });
+
+      req.on('error', (err) => this.log(`URL action error: ${err.message}`));
+
+      if (method === 'POST' && action.body) {
+        try {
+          req.write(action.body);
+        } catch (e) {
+          this.log(`Error writing POST body: ${e.message}`);
+        }
+      }
+      req.end();
+      this.log(`Triggered URL: ${action.url} [${method}]`);
+    } catch (err) {
+      this.log(`Error executing URL action: ${err.message}`);
+    }
   }
 
   // -------------------------
@@ -292,6 +292,7 @@ class IPortSMButtonsPlatform {
     r = Math.round((r / max) * 255);
     g = Math.round((g / max) * 255);
     b = Math.round((b / max) * 255);
+
     for (const mode in this.modeColors) {
       const mc = this.modeColors[mode];
       if (r === mc.r && g === mc.g && b === mc.b) return mode;
@@ -306,10 +307,12 @@ class IPortSMButtonsPlatform {
     if (!action.targetName) return;
     const targetAccessory = this.findAccessoryByName(action.targetName);
     if (!targetAccessory) return;
+
     let service = targetAccessory.getService(this.api.hap.Service.Switch) || targetAccessory.getService(this.api.hap.Service.Lightbulb);
     if (!service) return;
     const onCharacteristic = service.getCharacteristic(this.api.hap.Characteristic.On);
     if (!onCharacteristic) return;
+
     switch (action.action) {
       case 'toggle': {
         const currentState = onCharacteristic.value;
@@ -412,8 +415,6 @@ class IPortSMButtonsPlatform {
   accessories(callback) {
     try {
       const PlatformAccessory = this.api.platformAccessory;
-      if (!PlatformAccessory) throw new Error('PlatformAccessory missing');
-
       const uuidStr = this.api.hap.uuid.generate(this.config.name || 'iPort SM Buttons');
       this.accessory = new PlatformAccessory(this.config.name || 'iPort SM Buttons', uuidStr);
 
@@ -422,26 +423,22 @@ class IPortSMButtonsPlatform {
           .setCharacteristic(this.api.hap.Characteristic.ServiceLabelNamespace, 1);
       }
 
-      // Physical buttons
       this.buttonServices = [];
       for (let i = 1; i <= 10; i++) {
-        const svc = this.accessory.addService(this.api.hap.Service.StatelessProgrammableSwitch, `Button ${i}`, `button${i}`);
+        const buttonService = this.accessory.addService(this.api.hap.Service.StatelessProgrammableSwitch, `Button ${i}`, `button${i}`);
         if (this.api.hap.Characteristic.ServiceLabelIndex) {
-          svc.setCharacteristic(this.api.hap.Characteristic.ServiceLabelIndex, i);
+          buttonService.setCharacteristic(this.api.hap.Characteristic.ServiceLabelIndex, i);
         }
-        svc.setCharacteristic(this.api.hap.Characteristic.Name, `Button ${i}`);
-        this.buttonServices[i - 1] = svc;
+        this.buttonServices[i - 1] = buttonService;
       }
 
-      // LED Light
       this.lightService = this.accessory.addService(this.api.hap.Service.Lightbulb, 'LED');
-      this.lightService.setCharacteristic(this.api.hap.Characteristic.Name, 'LED');
+      this.lightService.setCharacteristic(this.api.hap.Characteristic.On, true);
 
-      // Mapping switches
       this.mappingSwitches = {};
       this.buttonMappings.forEach((mapping) => {
         const key = this.getMappingKey(mapping);
-        const svcName = `B${mapping.buttonNumber} [${mapping.modeColor}]`;
+        const svcName = `B${mapping.buttonNumber} [${mapping.modeColor}] → ${mapping.actionType}`;
         const vSwitch = this.accessory.addService(this.api.hap.Service.Switch, svcName, key);
         vSwitch.setCharacteristic(this.api.hap.Characteristic.Name, svcName);
         vSwitch.getCharacteristic(this.api.hap.Characteristic.On).onSet((value) => {
@@ -463,25 +460,25 @@ class IPortSMButtonsPlatform {
   }
 
   configureAccessory(accessory) {
-    try {
-      this.accessory = accessory;
-      if (this.accessory.updateReachability) this.accessory.updateReachability(this.connected);
-      this.buttonServices = [];
-      this.mappingSwitches = {};
-      accessory.services.forEach(service => {
-        if (service.subtype?.startsWith('button')) {
-          const index = parseInt(service.subtype.replace('button', '')) - 1;
-          this.buttonServices[index] = service;
-        } else if (service.displayName === 'LED' && service.UUID === this.api.hap.Service.Lightbulb.UUID) {
-          this.lightService = service;
-        } else if (service.UUID === this.api.hap.Service.Switch.UUID && service.subtype) {
+    this.accessory = accessory;
+    if (this.accessory.updateReachability) this.accessory.updateReachability(this.connected);
+    this.buttonServices = [];
+    this.mappingSwitches = {};
+
+    accessory.services.forEach(service => {
+      if (service.subtype?.startsWith('button')) {
+        const index = parseInt(service.subtype.replace('button', '')) - 1;
+        this.buttonServices[index] = service;
+      } else if (service.displayName === 'LED' && service.UUID === this.api.hap.Service.Lightbulb.UUID) {
+        this.lightService = service;
+      } else if (service.UUID === this.api.hap.Service.Switch.UUID) {
+        if (service.subtype) {
           this.mappingSwitches[service.subtype] = service;
           try { service.updateCharacteristic(this.api.hap.Characteristic.On, false); } catch (e) {}
         }
-      });
-    } catch (e) {
-      this.log(`Error in configureAccessory: ${e.message}`);
-    }
+      }
+    });
+    this.processQueuedEvents();
   }
 }
 

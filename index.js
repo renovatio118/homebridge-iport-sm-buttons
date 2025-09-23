@@ -438,9 +438,11 @@ class IPortSMButtonsPlatform {
       this.mappingSwitches = {};
       this.buttonMappings.forEach((mapping) => {
         const key = this.getMappingKey(mapping);
-        const svcName = `B${mapping.buttonNumber} [${mapping.modeColor}] → ${mapping.actionType}`;
+        const shortName = `B${mapping.buttonNumber} [${mapping.modeColor}]`;
+        const svcName = `${shortName} → ${mapping.actionType}`;
         const vSwitch = this.accessory.addService(this.api.hap.Service.Switch, svcName, key);
-        vSwitch.setCharacteristic(this.api.hap.Characteristic.Name, svcName);
+        vSwitch.setCharacteristic(this.api.hap.Characteristic.Name, shortName);
+        this.mappingSwitches[key] = vSwitch;
         vSwitch.getCharacteristic(this.api.hap.Characteristic.On).onSet((value) => {
           if (value) {
             setTimeout(() => {
@@ -486,3 +488,4 @@ module.exports = (api) => {
   console.log('Registering IPortSMButtons platform');
   api.registerPlatform('homebridge-iport-sm-buttons', 'IPortSMButtons', IPortSMButtonsPlatform);
 };
+

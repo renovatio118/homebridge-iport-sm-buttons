@@ -1,67 +1,90 @@
-"buttonMappings": {
-  "title": "Button Mappings",
-  "type": "array",
-  "items": {
-    "title": "Button Mapping",
-    "type": "object",
-    "properties": {
-      "buttonNumber": {
-        "title": "Button Number",
-        "type": "integer",
-        "minimum": 1,
-        "maximum": 10
-      },
-      "modeColor": {
-        "title": "Mode Color",
-        "type": "string",
-        "enum": ["any", "yellow", "red", "blue", "green", "purple", "white"],
-        "default": "any"
-      },
-      "actionType": {
-        "title": "Action Type",
-        "type": "string",
-        "enum": ["accessory", "url"],
-        "default": "accessory"
-      }
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "iPort Buttons Config",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "title": "Plugin Name"
     },
-    "oneOf": [
-      {
-        "title": "Accessory Action",
+    "ip": {
+      "type": "string",
+      "title": "iPort IP Address"
+    },
+    "port": {
+      "type": "integer",
+      "title": "Port",
+      "default": 10001
+    },
+    "buttonMappings": {
+      "title": "Button Mappings",
+      "type": "array",
+      "items": {
+        "title": "Button Mapping",
+        "type": "object",
         "properties": {
-          "actionType": { "enum": ["accessory"] },
-          "targetName": {
-            "title": "Target Accessory Name",
-            "type": "string"
+          "buttonNumber": {
+            "title": "Button Number",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10
           },
-          "action": {
+          "modeColor": {
+            "title": "Mode Color",
+            "type": "string",
+            "enum": ["any", "yellow", "red", "blue", "green", "purple", "white"],
+            "default": "any"
+          },
+          "actionType": {
+            "title": "Action Type",
+            "type": "string",
+            "enum": ["accessory", "url"],
+            "default": "accessory"
+          }
+        },
+        "oneOf": [
+          {
             "title": "Accessory Action",
-            "type": "string",
-            "enum": ["on", "off", "toggle"],
-            "default": "toggle"
-          }
-        }
-      },
-      {
-        "title": "URL Action",
-        "properties": {
-          "actionType": { "enum": ["url"] },
-          "url": {
-            "title": "URL",
-            "type": "string",
-            "placeholder": "http://example.com/webhook"
+            "properties": {
+              "actionType": { "enum": ["accessory"] },
+              "targetName": {
+                "title": "Target Accessory Name",
+                "type": "string"
+              },
+              "action": {
+                "title": "Accessory Action",
+                "type": "string",
+                "enum": ["on", "off", "toggle"],
+                "default": "toggle"
+              }
+            },
+            "required": ["targetName", "action"]
           },
-          "method": {
-            "title": "HTTP Method",
-            "type": "string",
-            "enum": ["GET", "POST"],
-            "default": "GET"
-          },
-          "body": {
-            "title": "HTTP Body (for POST)",
-            "type": "string"
+          {
+            "title": "URL Action",
+            "properties": {
+              "actionType": { "enum": ["url"] },
+              "url": {
+                "title": "URL",
+                "type": "string",
+                "placeholder": "http://example.com/webhook"
+              },
+              "method": {
+                "title": "HTTP Method",
+                "type": "string",
+                "enum": ["GET", "POST"],
+                "default": "GET"
+              },
+              "body": {
+                "title": "HTTP Body (for POST)",
+                "type": "string"
+              }
+            },
+            "required": ["url", "method"]
           }
-        }
+        ]
       }
-    ]
-  }
+    }
+  },
+  "required": ["name", "ip", "port", "buttonMappings"]
 }

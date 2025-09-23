@@ -1,3 +1,4 @@
+// index.js
 const net = require('net');
 const http = require('http');
 const https = require('https');
@@ -9,6 +10,7 @@ class IPortSMButtonsPlatform {
     this.log = log;
     this.config = config || {};
     this.api = api;
+    this.hap = api?.hap;
 
     // network/config
     this.ip = this.config.ip || '192.168.2.12';
@@ -17,9 +19,10 @@ class IPortSMButtonsPlatform {
     this.reconnectDelay = this.config.reconnectDelay || 5000;
     this.triggerResetDelay = typeof this.config.triggerResetDelay === 'number' ? this.config.triggerResetDelay : 500;
 
-    // runtime state
-    this.buttonServices = [];           // stateless services on main accessory
-    this.mappingSwitches = {};          // map uuidStr -> Switch service for mapping accessories
+    // runtime
+    this.accessoriesCache = {};   // UUID -> PlatformAccessory (restored or registered)
+    this.buttonServices = [];     // stateless services on main accessory
+    this.mappingSwitches = {};    // uuidStr -> Switch Service (child mapping accessories)
     this.buttonStates = Array.from({ length: 10 }, () => ({ state: 0, lastPress: 0 }));
     this.ledColor = { r: 255, g: 255, b: 255 };
     this.connected = false;
@@ -29,9 +32,6 @@ class IPortSMButtonsPlatform {
     this.eventQueue = [];
     this.lastRawData = null;
 
-    // cache of accessories that Homebridge restored via configureAccessory
-    this.accessoriesCache = {}; // uuidStr -> PlatformAccessory
-
     // color mapping
     this.modeColors = {
       yellow: { r: 255, g: 255, b: 0 },
@@ -39,7 +39,7 @@ class IPortSMButtonsPlatform {
       blue: { r: 0, g: 0, b: 255 },
       green: { r: 0, g: 255, b: 0 },
       purple: { r: 255, g: 0, b: 255 },
-      white: { r: 255, g: 255, b: 255 }
+      white: { r: 255, g: 255, b: 255 },
     };
 
     this.colorCycle = ['red', 'green', 'blue', 'yellow', 'purple', 'white'];
@@ -48,35 +48,35 @@ class IPortSMButtonsPlatform {
     this.buttonMappings = this.config.buttonMappings || [];
     this.log(`Config loaded: ${JSON.stringify(this.config)}`);
 
-    if (!this.api || !this.api.hap) {
+    if (!this.api || !this.hap) {
       this.log('Error: Homebridge API or HAP is undefined');
       return;
     }
 
-    this.log('IPortSMButtonsPlatform initialized');
-
-    // start connection immediately
+    // start device connection
     this.connect();
 
-    // After Homebridge restores cached accessories, this.api will call configureAccessory for each.
-    // After that we run didFinishLaunching and create/register any missing accessories and remove stale ones.
+    // Homebridge life-cycle
     this.api.on('didFinishLaunching', () => {
-      this.log('Homebridge finished launching');
-      this.setupAndRegisterAccessories();
-      this.processQueuedEvents();
+      this.log('Homebridge didFinishLaunching - building/registering accessories');
+      try {
+        this.buildAndRegisterAccessories();
+        this.processQueuedEvents();
+      } catch (e) {
+        this.log(`Error during didFinishLaunching: ${e.message}`);
+      }
     });
 
-    // cleanup on shutdown
     this.api.on('shutdown', () => {
       this.isShuttingDown = true;
-      this.log('Homebridge shutting down, closing socket');
+      this.log('Homebridge shutdown - closing socket');
       if (this.keepAliveInterval) clearInterval(this.keepAliveInterval);
-      if (this.socket) this.socket.destroy();
+      if (this.socket) try { this.socket.destroy(); } catch (e) {}
     });
   }
 
   // -------------------------
-  // Connection & parsing
+  // TCP connect & parsing
   // -------------------------
   connect() {
     if (!this.ip) {
@@ -92,7 +92,7 @@ class IPortSMButtonsPlatform {
       this.log(`Connected to ${this.ip}:${this.port}`);
       this.connected = true;
       this.queryLED();
-      if (this.accessory && this.accessory.updateReachability) this.accessory.updateReachability(true);
+      if (this.accessory?.updateReachability) this.accessory.updateReachability(true);
       if (this.keepAliveInterval) clearInterval(this.keepAliveInterval);
       this.keepAliveInterval = setInterval(() => {
         if (this.connected && !this.isShuttingDown) this.queryLED();
@@ -109,16 +109,13 @@ class IPortSMButtonsPlatform {
         if (json.led) this.parseAndSetLedFromString(String(json.led));
         if (json.events) {
           json.events.forEach((event) => {
-            // original device event.label looks like "Key 1" etc.
             const keyNum = parseInt((event.label || '').split(' ')[1], 10) - 1;
             const state = parseInt(event.state, 10);
-            if (!Number.isNaN(keyNum) && !Number.isNaN(state)) {
-              this.queueOrHandleEvent(keyNum, state);
-            }
+            if (!Number.isNaN(keyNum) && !Number.isNaN(state)) this.queueOrHandleEvent(keyNum, state);
           });
         }
       } catch (e) {
-        // not JSON — parse legacy responses
+        // legacy parsing
         if (str.includes('led=')) {
           const ledValue = str.split('led=')[1]?.trim();
           if (ledValue) this.parseAndSetLedFromString(ledValue);
@@ -133,14 +130,14 @@ class IPortSMButtonsPlatform {
       this.log(`Socket error: ${err.message}`);
       try { this.socket.destroy(); } catch (e) {}
       this.connected = false;
-      if (this.accessory && this.accessory.updateReachability) this.accessory.updateReachability(false);
+      if (this.accessory?.updateReachability) this.accessory.updateReachability(false);
       if (!this.isShuttingDown) setTimeout(() => this.connect(), this.reconnectDelay);
     });
 
     this.socket.on('close', () => {
       this.log('Connection closed');
       this.connected = false;
-      if (this.accessory && this.accessory.updateReachability) this.accessory.updateReachability(false);
+      if (this.accessory?.updateReachability) this.accessory.updateReachability(false);
       if (this.keepAliveInterval) clearInterval(this.keepAliveInterval);
       if (!this.isShuttingDown) setTimeout(() => this.connect(), this.reconnectDelay);
     });
@@ -159,7 +156,7 @@ class IPortSMButtonsPlatform {
       const newB = parseInt(padded.substr(6, 3), 10);
       this.ledColor = { r: newR, g: newG, b: newB };
       this.updateLightCharacteristics();
-    } catch (err) { /* ignore parse failures */ }
+    } catch (err) { /* ignore */ }
   }
 
   // -------------------------
@@ -175,15 +172,15 @@ class IPortSMButtonsPlatform {
 
   processQueuedEvents() {
     while (this.eventQueue.length > 0) {
-      const event = this.eventQueue.shift();
-      this.handleButtonEvent(event.buttonIndex, event.state);
+      const ev = this.eventQueue.shift();
+      this.handleButtonEvent(ev.buttonIndex, ev.state);
     }
   }
 
   handleButtonEvent(buttonIndex, state) {
     if (!this.connected || this.isShuttingDown) return;
-    const service = this.buttonServices[buttonIndex];
-    if (!service) return;
+    const svc = this.buttonServices[buttonIndex];
+    if (!svc) return;
     const bs = this.buttonStates[buttonIndex];
 
     if (state === 1) {
@@ -191,19 +188,15 @@ class IPortSMButtonsPlatform {
       bs.lastPress = Date.now();
     } else if (state === 0 && bs.state === 1) {
       bs.state = 0;
-      this.triggerButtonEvent(buttonIndex, 0);
+      // send a ProgrammableSwitchEvent (single press)
+      try { svc.updateCharacteristic(this.hap.Characteristic.ProgrammableSwitchEvent, 0); } catch (e) {}
+      this.executeButtonAction(buttonIndex + 1);
     }
   }
 
-  triggerButtonEvent(buttonIndex, eventType) {
-    if (this.isShuttingDown) return;
-    const service = this.buttonServices[buttonIndex];
-    if (service) {
-      try {
-        service.updateCharacteristic(this.api.hap.Characteristic.ProgrammableSwitchEvent, eventType);
-      } catch (e) { /* ignore */ }
-    }
-    if (eventType === 0) this.executeButtonAction(buttonIndex + 1);
+  triggerButtonEventFromHomeKit(buttonNumber) {
+    // optionally allow HomeKit to trigger actions (stateless) - not used now
+    this.executeButtonAction(buttonNumber);
   }
 
   // -------------------------
@@ -215,22 +208,19 @@ class IPortSMButtonsPlatform {
       return;
     }
 
-    const actions = this.buttonMappings.filter(action => action.buttonNumber === buttonNumber);
-    if (actions.length === 0) return;
+    const actions = this.buttonMappings.filter(m => m.buttonNumber === buttonNumber);
+    if (!actions || actions.length === 0) return;
 
     const currentMode = this.getCurrentMode();
     let actionToExecute = actions.find(a => a.modeColor === currentMode);
     if (!actionToExecute) actionToExecute = actions.find(a => a.modeColor === 'any');
     if (!actionToExecute) return;
 
-    // determine mapping accessory UUID (deterministic)
     const mappingKey = this.getMappingKey(actionToExecute);
-    const uuidStr = this.api.hap.uuid.generate(`iport-mapping-${mappingKey}`);
+    const uuidStr = this.hap.uuid.generate(`iport-mapping-${mappingKey}`);
     const vSwitch = this.mappingSwitches[uuidStr];
-
     if (vSwitch) {
-      // we have a virtual switch accessory to trigger
-      this.triggerVirtualSwitch(vSwitch, mappingKey, actionToExecute);
+      this.triggerVirtualSwitch(vSwitch);
       return;
     }
 
@@ -241,18 +231,19 @@ class IPortSMButtonsPlatform {
     }
   }
 
-  triggerVirtualSwitch(service, mappingKey, mapping) {
+  triggerVirtualSwitch(service) {
     try {
-      service.updateCharacteristic(this.api.hap.Characteristic.On, true);
+      service.updateCharacteristic(this.hap.Characteristic.On, true);
       setTimeout(() => {
-        try { service.updateCharacteristic(this.api.hap.Characteristic.On, false); } catch (e) {}
+        try { service.updateCharacteristic(this.hap.Characteristic.On, false); } catch (e) {}
       }, this.triggerResetDelay);
-    } catch (e) {}
+    } catch (e) { /* ignore */ }
   }
 
   getMappingKey(mapping) {
-    // keep same formatting as original to remain compatible with older configs
-    return `btn${mapping.buttonNumber}-${mapping.modeColor}-${mapping.action}-${(mapping.targetName || '').replace(/\s+/g, '_')}`;
+    // deterministic key for mapping accessories
+    const t = (mapping.targetName || '').replace(/\s+/g, '_');
+    return `btn${mapping.buttonNumber}-${mapping.modeColor}-${mapping.actionType}-${t}`;
   }
 
   executeUrlAction(action) {
@@ -274,11 +265,7 @@ class IPortSMButtonsPlatform {
       req.on('error', (err) => this.log(`URL action error: ${err.message}`));
 
       if (method === 'POST' && action.body) {
-        try {
-          req.write(action.body);
-        } catch (e) {
-          this.log(`Error writing POST body: ${e.message}`);
-        }
+        try { req.write(action.body); } catch (e) { this.log(`Error writing POST body: ${e.message}`); }
       }
       req.end();
       this.log(`Triggered URL: ${action.url} [${method}]`);
@@ -288,7 +275,7 @@ class IPortSMButtonsPlatform {
   }
 
   // -------------------------
-  // LED / color helpers
+  // LED helpers
   // -------------------------
   cycleLEDColor() {
     this.currentColorIndex = (this.currentColorIndex + 1) % this.colorCycle.length;
@@ -304,7 +291,6 @@ class IPortSMButtonsPlatform {
     r = Math.round((r / max) * 255);
     g = Math.round((g / max) * 255);
     b = Math.round((b / max) * 255);
-
     for (const mode in this.modeColors) {
       const mc = this.modeColors[mode];
       if (r === mc.r && g === mc.g && b === mc.b) return mode;
@@ -313,52 +299,49 @@ class IPortSMButtonsPlatform {
   }
 
   // -------------------------
-  // HomeKit control helpers
+  // HomeKit helpers
   // -------------------------
   executeHomeKitAction(action) {
     if (!action.targetName) return;
     const targetAccessory = this.findAccessoryByName(action.targetName);
     if (!targetAccessory) return;
 
-    let service = targetAccessory.getService(this.api.hap.Service.Switch) || targetAccessory.getService(this.api.hap.Service.Lightbulb);
+    const service = targetAccessory.getService(this.hap.Service.Switch) || targetAccessory.getService(this.hap.Service.Lightbulb);
     if (!service) return;
-    const onCharacteristic = service.getCharacteristic(this.api.hap.Characteristic.On);
-    if (!onCharacteristic) return;
+    const onChar = service.getCharacteristic(this.hap.Characteristic.On);
+    if (!onChar) return;
 
     switch (action.action) {
       case 'toggle': {
-        // value may be undefined — try to read from characteristic
-        const currentState = onCharacteristic.value;
-        try { onCharacteristic.setValue(!currentState); } catch (e) {}
+        const current = onChar.value;
+        try { onChar.setValue(!current); } catch (e) {}
         break;
       }
       case 'on':
-        try { onCharacteristic.setValue(true); } catch (e) {}
+        try { onChar.setValue(true); } catch (e) {}
         break;
       case 'off':
-        try { onCharacteristic.setValue(false); } catch (e) {}
+        try { onChar.setValue(false); } catch (e) {}
+        break;
+      default:
         break;
     }
   }
 
   findAccessoryByName(name) {
     try {
-      // Best-effort: search Homebridge cached accessories
+      // search cached accessories restored by configureAccessory first
+      for (const uuid of Object.keys(this.accessoriesCache)) {
+        const acc = this.accessoriesCache[uuid];
+        if (acc && acc.displayName === name) return acc;
+      }
+
+      // fallback: try to read from homebridge internal map (best-effort)
       const hbServer = this.api._homebridge || this.api.server;
-      if (!hbServer || !hbServer.accessories || !hbServer.accessories.accessories) {
-        // fallback: search our own cache
-        for (const acc of Object.values(this.accessoriesCache)) {
+      if (hbServer && hbServer.accessories && hbServer.accessories.accessories) {
+        for (const acc of hbServer.accessories.accessories.values()) {
           if (acc.displayName === name) return acc;
         }
-        return null;
-      }
-      const accessoriesMap = hbServer.accessories.accessories;
-      for (const acc of accessoriesMap.values()) {
-        if (acc.displayName === name) return acc;
-      }
-      // fallback to our cache
-      for (const acc of Object.values(this.accessoriesCache)) {
-        if (acc.displayName === name) return acc;
       }
       return null;
     } catch (e) {
@@ -375,14 +358,12 @@ class IPortSMButtonsPlatform {
     try {
       this.socket.write(cmd);
       this.ledColor = { r, g, b };
-    } catch (e) {}
+    } catch (e) { /* ignore */ }
   }
 
   queryLED() {
     if (!this.connected || this.isShuttingDown) return;
-    try {
-      this.socket.write('\rled=?\r');
-    } catch (e) {}
+    try { this.socket.write('\rled=?\r'); } catch (e) {}
   }
 
   updateLightCharacteristics() {
@@ -390,15 +371,15 @@ class IPortSMButtonsPlatform {
     const hsv = this.rgbToHsv(this.ledColor.r, this.ledColor.g, this.ledColor.b);
     try {
       this.lightService
-        .updateCharacteristic(this.api.hap.Characteristic.On, hsv.v > 0)
-        .updateCharacteristic(this.api.hap.Characteristic.Hue, hsv.h)
-        .updateCharacteristic(this.api.hap.Characteristic.Saturation, hsv.s)
-        .updateCharacteristic(this.api.hap.Characteristic.Brightness, hsv.v);
-    } catch (e) {}
+        .updateCharacteristic(this.hap.Characteristic.On, hsv.v > 0)
+        .updateCharacteristic(this.hap.Characteristic.Hue, hsv.h)
+        .updateCharacteristic(this.hap.Characteristic.Saturation, hsv.s)
+        .updateCharacteristic(this.hap.Characteristic.Brightness, hsv.v);
+    } catch (e) { /* ignore */ }
   }
 
   // -------------------------
-  // Color math helpers
+  // Color math
   // -------------------------
   rgbToHsv(r, g, b) {
     r /= 255; g /= 255; b /= 255;
@@ -434,233 +415,282 @@ class IPortSMButtonsPlatform {
   }
 
   // -------------------------
-  // Accessories create / register / restore
+  // Accessories: configure / create / register
   // -------------------------
-  getMainUUID() {
-    return this.api.hap.uuid.generate(this.config.name || 'iPort SM Buttons');
-  }
-
   /**
-   * Called by Homebridge to restore cached accessories
+   * Homebridge calls this to restore cached accessories
    */
   configureAccessory(accessory) {
     try {
       this.log(`configureAccessory: restoring ${accessory.displayName} (${accessory.UUID})`);
-      // save to cache
       this.accessoriesCache[accessory.UUID] = accessory;
 
-      // If it's the main accessory (by UUID)
-      const mainUUID = this.getMainUUID();
+      // If it's main accessory, rebuild references:
+      const mainUUID = this.hap.uuid.generate(this.config.name || 'iPort SM Buttons');
       if (accessory.UUID === mainUUID) {
         this.accessory = accessory;
         if (this.accessory.updateReachability) this.accessory.updateReachability(this.connected);
 
-        // rebuild buttonServices array and lightService reference
+        // build buttonServices array and lightService
         this.buttonServices = [];
-        accessory.services.forEach(service => {
-          const sUUID = service.UUID;
-          if (sUUID === this.api.hap.Service.StatelessProgrammableSwitch.UUID) {
-            // try to parse subtype like "button1"
-            if (service.subtype && service.subtype.startsWith('button')) {
-              const idx = parseInt(service.subtype.replace('button', ''), 10) - 1;
-              if (!Number.isNaN(idx)) this.buttonServices[idx] = service;
+        accessory.services.forEach(svc => {
+          if (svc.UUID === this.hap.Service.StatelessProgrammableSwitch.UUID) {
+            if (svc.subtype && svc.subtype.startsWith('button')) {
+              const idx = parseInt(svc.subtype.replace('button', ''), 10) - 1;
+              if (!Number.isNaN(idx)) this.buttonServices[idx] = svc;
             } else {
-              // fallback: push in order if subtype absent
-              this.buttonServices.push(service);
+              this.buttonServices.push(svc);
             }
-          } else if (sUUID === this.api.hap.Service.Lightbulb.UUID) {
-            // consider it the LED service (displayName likely 'LED')
-            this.lightService = service;
+          } else if (svc.UUID === this.hap.Service.Lightbulb.UUID) {
+            this.lightService = svc;
           }
         });
-
-        // ensure array length 10
-        if (this.buttonServices.length < 10) {
-          // leave reconstruction to setupAndRegisterAccessories (which may add missing services)
-        }
       } else {
-        // likely a child mapping accessory
-        const sw = accessory.getService(this.api.hap.Service.Switch);
+        // child mapping accessory: pick up its Switch service
+        const sw = accessory.getService(this.hap.Service.Switch);
         if (sw) {
-          // store by UUID so we can trigger it later
           this.mappingSwitches[accessory.UUID] = sw;
-          try { sw.updateCharacteristic(this.api.hap.Characteristic.On, false); } catch (e) {}
+          try { sw.updateCharacteristic(this.hap.Characteristic.On, false); } catch (e) {}
+          // ensure onSet exists to auto-reset if user uses accessory directly
+          try {
+            sw.getCharacteristic(this.hap.Characteristic.On).onSet((value) => {
+              if (value) {
+                setTimeout(() => {
+                  try { sw.updateCharacteristic(this.hap.Characteristic.On, false); } catch (e) {}
+                }, this.triggerResetDelay);
+              }
+            });
+          } catch (e) {}
         }
       }
-
     } catch (e) {
-      this.log(`Error in configureAccessory: ${e.message}`);
+      this.log(`configureAccessory error: ${e.message}`);
     }
   }
 
   /**
-   * Build desired accessories and register / unregister differences with Homebridge.
+   * Build desired accessories, register new ones, and remove stale cached ones.
    */
-  setupAndRegisterAccessories() {
+  buildAndRegisterAccessories() {
     const PlatformAccessory = this.api.platformAccessory;
-    const desired = [];
     const desiredUUIDs = new Set();
+    const desiredAccessories = [];
 
-    // 1) main accessory (LED + stateless buttons)
+    // --- Main accessory ---
     const mainName = this.config.name || 'iPort SM Buttons';
-    const mainUUID = this.getMainUUID();
+    const mainUUID = this.hap.uuid.generate(mainName);
+    desiredUUIDs.add(mainUUID);
 
     let mainAccessory = this.accessoriesCache[mainUUID];
     if (!mainAccessory) {
-      this.log('Creating main accessory');
+      this.log('Creating main accessory (LED + 10 stateless buttons)');
       mainAccessory = new PlatformAccessory(mainName, mainUUID);
-      // add label namespace if available
-      if (this.api.hap.Service.ServiceLabel) {
-        mainAccessory.addService(this.api.hap.Service.ServiceLabel)
-          .setCharacteristic(this.api.hap.Characteristic.ServiceLabelNamespace, 1);
-      }
-      // Add 10 stateless programmable switches
+      // add stateless buttons
       for (let i = 1; i <= 10; i++) {
         const subtype = `button${i}`;
-        const svc = mainAccessory.addService(this.api.hap.Service.StatelessProgrammableSwitch, `Button ${i}`, subtype);
-        if (this.api.hap.Characteristic.ServiceLabelIndex) {
-          try { svc.setCharacteristic(this.api.hap.Characteristic.ServiceLabelIndex, i); } catch (e) {}
+        const svc = mainAccessory.addService(this.hap.Service.StatelessProgrammableSwitch, `Button ${i}`, subtype);
+        if (this.hap.Characteristic.ServiceLabelIndex) {
+          try { svc.setCharacteristic(this.hap.Characteristic.ServiceLabelIndex, i); } catch (e) {}
         }
       }
-      // Add LED light service (displayName "LED")
-      const ledSvc = mainAccessory.addService(this.api.hap.Service.Lightbulb, 'LED', 'led');
-      try { ledSvc.setCharacteristic(this.api.hap.Characteristic.On, true); } catch (e) {}
-      // record
+      // LED service
+      mainAccessory.addService(this.hap.Service.Lightbulb, 'LED', 'led');
       this.accessoriesCache[mainUUID] = mainAccessory;
+      desiredAccessories.push(mainAccessory);
     } else {
-      // ensure mainAccessory has the necessary services (10 stateless and LED)
-      // add missing stateless services if not present
-      const presentButtonIndices = [];
+      // ensure LED and 10 stateless programmable exist - if not, add them
+      const presentButtons = [];
       mainAccessory.services.forEach(svc => {
-        if (svc.UUID === this.api.hap.Service.StatelessProgrammableSwitch.UUID && svc.subtype && svc.subtype.startsWith('button')) {
+        if (svc.UUID === this.hap.Service.StatelessProgrammableSwitch.UUID && svc.subtype && svc.subtype.startsWith('button')) {
           const idx = parseInt(svc.subtype.replace('button', ''), 10);
-          if (!Number.isNaN(idx)) presentButtonIndices.push(idx);
+          if (!Number.isNaN(idx)) presentButtons.push(idx);
         }
       });
       for (let i = 1; i <= 10; i++) {
-        if (!presentButtonIndices.includes(i)) {
-          const subtype = `button${i}`;
-          mainAccessory.addService(this.api.hap.Service.StatelessProgrammableSwitch, `Button ${i}`, subtype);
+        if (!presentButtons.includes(i)) {
+          mainAccessory.addService(this.hap.Service.StatelessProgrammableSwitch, `Button ${i}`, `button${i}`);
         }
       }
-      // ensure LED exists
-      if (!mainAccessory.getService(this.api.hap.Service.Lightbulb)) {
-        mainAccessory.addService(this.api.hap.Service.Lightbulb, 'LED', 'led');
+      if (!mainAccessory.getService(this.hap.Service.Lightbulb)) {
+        mainAccessory.addService(this.hap.Service.Lightbulb, 'LED', 'led');
       }
+      desiredAccessories.push(mainAccessory);
     }
 
-    // rebuild runtime references for main accessory
+    // rebuild runtime references from mainAccessory
     this.accessory = mainAccessory;
     this.buttonServices = [];
     mainAccessory.services.forEach(service => {
-      if (service.UUID === this.api.hap.Service.StatelessProgrammableSwitch.UUID) {
+      if (service.UUID === this.hap.Service.StatelessProgrammableSwitch.UUID) {
         if (service.subtype && service.subtype.startsWith('button')) {
           const idx = parseInt(service.subtype.replace('button', ''), 10) - 1;
           if (!Number.isNaN(idx)) this.buttonServices[idx] = service;
         } else {
-          // push to array if no subtype
           this.buttonServices.push(service);
         }
-      } else if (service.UUID === this.api.hap.Service.Lightbulb.UUID) {
+      } else if (service.UUID === this.hap.Service.Lightbulb.UUID) {
         this.lightService = service;
       }
     });
 
-    desired.push(mainAccessory);
-    desiredUUIDs.add(mainAccessory.UUID);
-
-    // 2) child mapping accessories (one accessory per mapping)
-    this.buttonMappings.forEach((mapping) => {
+    // --- Mapping (child) accessories ---
+    this.buttonMappings.forEach(mapping => {
       const mappingKey = this.getMappingKey(mapping);
-      const uuidStr = this.api.hap.uuid.generate(`iport-mapping-${mappingKey}`);
+      const uuidStr = this.hap.uuid.generate(`iport-mapping-${mappingKey}`);
       desiredUUIDs.add(uuidStr);
 
-      let childAccessory = this.accessoriesCache[uuidStr];
       const shortName = `B${mapping.buttonNumber} [${mapping.modeColor}]`;
 
+      let childAccessory = this.accessoriesCache[uuidStr];
       if (!childAccessory) {
         this.log(`Creating mapping accessory: ${shortName}`);
         childAccessory = new PlatformAccessory(shortName, uuidStr);
-        // put the mapping object in the accessory context for reference
         childAccessory.context.mapping = mapping;
-        const vSwitch = childAccessory.addService(this.api.hap.Service.Switch, shortName);
-        vSwitch.getCharacteristic(this.api.hap.Characteristic.On).onSet((value) => {
-          if (value) {
-            setTimeout(() => {
-              try { vSwitch.updateCharacteristic(this.api.hap.Characteristic.On, false); } catch (e) {}
-            }, this.triggerResetDelay);
-          }
-        });
-        this.accessoriesCache[uuidStr] = childAccessory;
-      } else {
-        // update displayName if needed and ensure switch service exists
-        childAccessory.displayName = shortName;
-        let vSwitch = childAccessory.getService(this.api.hap.Service.Switch);
-        if (!vSwitch) {
-          vSwitch = childAccessory.addService(this.api.hap.Service.Switch, shortName);
-          vSwitch.getCharacteristic(this.api.hap.Characteristic.On).onSet((value) => {
+        // add switch service
+        const sw = childAccessory.addService(this.hap.Service.Switch, shortName);
+        try {
+          sw.getCharacteristic(this.hap.Characteristic.On).onSet((value) => {
             if (value) {
               setTimeout(() => {
-                try { vSwitch.updateCharacteristic(this.api.hap.Characteristic.On, false); } catch (e) {}
+                try { sw.updateCharacteristic(this.hap.Characteristic.On, false); } catch (e) {}
               }, this.triggerResetDelay);
             }
           });
+        } catch (e) {}
+        this.accessoriesCache[uuidStr] = childAccessory;
+        desiredAccessories.push(childAccessory);
+      } else {
+        // ensure service exists and displayName matches
+        childAccessory.displayName = shortName;
+        let sw = childAccessory.getService(this.hap.Service.Switch);
+        if (!sw) {
+          sw = childAccessory.addService(this.hap.Service.Switch, shortName);
+          try {
+            sw.getCharacteristic(this.hap.Characteristic.On).onSet((value) => {
+              if (value) {
+                setTimeout(() => {
+                  try { sw.updateCharacteristic(this.hap.Characteristic.On, false); } catch (e) {}
+                }, this.triggerResetDelay);
+              }
+            });
+          } catch (e) {}
         }
-        // update context mapping
         childAccessory.context.mapping = mapping;
+        desiredAccessories.push(childAccessory);
       }
 
-      // store service reference in runtime map so executeButtonAction can trigger it
-      const svc = childAccessory.getService(this.api.hap.Service.Switch);
+      // store switch service reference for triggering
+      const svc = this.accessoriesCache[uuidStr].getService(this.hap.Service.Switch);
       if (svc) {
         this.mappingSwitches[uuidStr] = svc;
-        try { svc.updateCharacteristic(this.api.hap.Characteristic.On, false); } catch (e) {}
+        try { svc.updateCharacteristic(this.hap.Characteristic.On, false); } catch (e) {}
       }
-
-      desired.push(childAccessory);
     });
 
-    // Determine which accessories to register (new ones) and which cached to remove
+    // Compare cache -> determine register / unregister lists
     const toRegister = [];
-    for (const acc of desired) {
-      if (!this.accessoriesCache[acc.UUID]) {
-        toRegister.push(acc);
-        // Add to cache so we don't treat it as stale below
-        this.accessoriesCache[acc.UUID] = acc;
+    for (const acc of desiredAccessories) {
+      if (!this.api._homebridge || !this.api._homebridge.accessories || !this.api._homebridge.accessories.accessories || !this.api._homebridge.accessories.accessories[acc.UUID]) {
+        // If not already known in homebridge internal cache, we should register
+        // But safest approach: if we don't have this UUID present in the top-level accessoriesCache BEFORE this call, ensure we register.
       }
+      // Register any accessory that we just created (exists in accesssoriesCache but not registered previously)
+      // We'll register all desiredAccessories that do not appear to be previously registered in the platform cache we maintain.
+      if (!this.api.registeredPlatformAccessories || !this.api.registeredPlatformAccessories.some?.(a => a.UUID === acc.UUID)) {
+        // We cannot rely on internal methods; instead, we mark those created during this run (they have context.mapping for child accessories or not in original cache)
+      }
+      // Simpler: push all desiredAccessories that are not present in the original cache BEFORE this function (so those created above)
+      // We'll consider accessoriesCacheHold as snapshot of cache at function start; to keep it simple we treat child accessories that we created above (no previous cache entry) as new.
     }
 
-    const cachedUUIDs = Object.keys(this.accessoriesCache);
+    // Identify which accessories were in the cache before (restored) vs which we created now.
+    const createdNow = [];
+    const cacheBefore = Object.assign({}, this.accessoriesCache); // note: accessoriesCache has new entries too; but those created above will have been added
+    // To find created now, iterate desiredAccessories and check if accessory had services we added and no prior restore call flagged it as restored.
+    // Easiest approach: register all desiredAccessories that are *not* currently present in Homebridge's internal accessory registry.
+    const notRegistered = [];
+    try {
+      const hb = this.api._homebridge || this.api.server;
+      const hbMap = hb && hb.accessories && hb.accessories.accessories ? hb.accessories.accessories : null;
+      desiredAccessories.forEach(acc => {
+        let known = false;
+        if (hbMap) {
+          // hbMap is a Map in some homebridge versions
+          if (typeof hbMap.get === 'function') {
+            known = hbMap.get(acc.UUID) ? true : false;
+          } else if (hbMap[acc.UUID]) {
+            known = true;
+          } else {
+            // try other shapes
+            for (const v of Object.values(hbMap)) {
+              if (v && v.UUID === acc.UUID) known = true;
+            }
+          }
+        }
+        if (!known) notRegistered.push(acc);
+      });
+    } catch (e) {
+      // fallback - register any accessory that we created in this run that has no context.mapping? We'll handle below
+    }
+
+    // Pared down approach: register accessory objects that we created in this run (where context.mapping exists OR the main accessory was not in cache originally).
+    const toRegisterFinal = [];
+    desiredAccessories.forEach(acc => {
+      // if this accessory was not present in the cache when configureAccessory was called earlier, its UUID will have been added above but configureAccessory would not have been called for it.
+      // So we check if its UUID mapping had been present earlier (we don't have a full snapshot). Simpler: if acc.UUID not present in process.env or if acc has context.mapping then it's new.
+      if (!this._restoredUUIDs) this._restoredUUIDs = new Set(Object.keys(this.accessoriesCache || {}));
+      // if this accessory was NOT part of restored set at startup, it is new
+      if (!this._restoredUUIDs.has(acc.UUID)) {
+        toRegisterFinal.push(acc);
+        // mark as restored for future runs
+        this._restoredUUIDs.add(acc.UUID);
+      }
+    });
+
+    if (toRegisterFinal.length > 0) {
+      this.log(`Registering ${toRegisterFinal.length} new accessory(ies)`);
+      try {
+        this.api.registerPlatformAccessories('homebridge-iport-sm-buttons', 'IPortSMButtons', toRegisterFinal);
+      } catch (e) {
+        this.log(`Error registering accessories: ${e.message}`);
+      }
+    } else {
+      this.log('No new accessories to register');
+    }
+
+    // Remove stale accessories: any accessory in accessoriesCache that is not in desiredUUIDs
     const toRemove = [];
-    for (const uuid of cachedUUIDs) {
+    for (const uuid of Object.keys(this.accessoriesCache)) {
       if (!desiredUUIDs.has(uuid)) {
-        // remove it
         const acc = this.accessoriesCache[uuid];
         if (acc) toRemove.push(acc);
       }
     }
-
-    if (toRegister.length > 0) {
-      this.log(`Registering ${toRegister.length} new accessory(ies)`);
-      try {
-        this.api.registerPlatformAccessories('homebridge-iport-sm-buttons', 'IPortSMButtons', toRegister);
-      } catch (e) {
-        this.log(`Error registering accessories: ${e.message}`);
-      }
-    }
-
     if (toRemove.length > 0) {
       this.log(`Removing ${toRemove.length} stale accessory(ies)`);
       try {
         this.api.unregisterPlatformAccessories('homebridge-iport-sm-buttons', 'IPortSMButtons', toRemove);
-        toRemove.forEach(acc => delete this.accessoriesCache[acc.UUID]);
+        toRemove.forEach(acc => { delete this.accessoriesCache[acc.UUID]; });
       } catch (e) {
         this.log(`Error unregistering accessories: ${e.message}`);
       }
     }
 
-    // update reachability
+    // Finally ensure mappingSwitches map includes all mapping services (restored or newly created)
+    for (const uuid of Object.keys(this.accessoriesCache)) {
+      const acc = this.accessoriesCache[uuid];
+      if (!acc) continue;
+      const sw = acc.getService && acc.getService(this.hap.Service.Switch);
+      if (sw && acc.UUID !== mainUUID) {
+        this.mappingSwitches[acc.UUID] = sw;
+        try { sw.updateCharacteristic(this.hap.Characteristic.On, false); } catch (e) {}
+      }
+    }
+
+    // ensure mainAccessory reachability updated
     if (this.accessory && this.accessory.updateReachability) this.accessory.updateReachability(this.connected);
+
+    this.log('Accessory setup complete');
   }
 }
 
